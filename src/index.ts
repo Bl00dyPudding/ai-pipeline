@@ -1,0 +1,183 @@
+#!/usr/bin/env node
+
+import { resolve } from 'node:path';
+import { Command } from 'commander';
+import { getConfig } from './config.js';
+import { getDatabase, closeDatabase } from './db/sqlite.js';
+import { TaskRepository } from './db/tasks.js';
+import { PipelineRunner } from './pipeline/runner.js';
+import { logger } from './utils/logger.js';
+import type { TaskStatus } from './pipeline/types.js';
+
+const program = new Command();
+
+program
+  .name('ai-pipeline')
+  .description('Multi-agent AI coding pipeline: task → code → review → test → merge')
+  .version('1.0.0');
+
+program
+  .command('run')
+  .description('Run a task through the AI pipeline')
+  .argument('<description>', 'Task description')
+  .requiredOption('--repo <path>', 'Path to target repository')
+  .option('--model <model>', 'Claude model to use')
+  .option('--max-attempts <n>', 'Maximum coding attempts', parseInt)
+  .option('--auto-merge', 'Automatically merge into main branch')
+  .action(async (description: string, opts: { repo: string; model?: string; maxAttempts?: number; autoMerge?: boolean }) => {
+    try {
+      const config = getConfig({
+        model: opts.model,
+        maxAttempts: opts.maxAttempts,
+        autoMerge: opts.autoMerge,
+      });
+      const db = getDatabase(config);
+      const repo = new TaskRepository(db);
+      const runner = new PipelineRunner(config, repo);
+
+      const task = await runner.run(description, {
+        repoPath: resolve(opts.repo),
+        model: config.model,
+        maxAttempts: config.maxAttempts,
+        autoMerge: config.autoMerge,
+      });
+
+      if (task.status === 'done') {
+        process.exit(0);
+      } else {
+        process.exit(1);
+      }
+    } catch (err) {
+      logger.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    } finally {
+      closeDatabase();
+    }
+  });
+
+program
+  .command('tasks')
+  .description('List all tasks')
+  .option('--status <status>', 'Filter by status')
+  .action((opts: { status?: string }) => {
+    try {
+      const config = getConfig();
+      const db = getDatabase(config);
+      const repo = new TaskRepository(db);
+
+      const tasks = repo.list(opts.status as TaskStatus | undefined);
+
+      if (tasks.length === 0) {
+        logger.info('No tasks found');
+        return;
+      }
+
+      logger.header('Tasks');
+      for (const task of tasks) {
+        logger.taskStatus(task.id, task.status, task.title);
+      }
+    } catch (err) {
+      logger.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    } finally {
+      closeDatabase();
+    }
+  });
+
+program
+  .command('show')
+  .description('Show task details and agent logs')
+  .argument('<task-id>', 'Task ID')
+  .action((taskId: string) => {
+    try {
+      const config = getConfig();
+      const db = getDatabase(config);
+      const repo = new TaskRepository(db);
+
+      const task = repo.getById(parseInt(taskId, 10));
+      if (!task) {
+        logger.error(`Task #${taskId} not found`);
+        process.exit(1);
+      }
+
+      logger.header(`Task #${task.id}`);
+      console.log(`  Title:       ${task.title}`);
+      console.log(`  Status:      ${task.status}`);
+      console.log(`  Repository:  ${task.repo_path}`);
+      console.log(`  Branch:      ${task.branch_name ?? '—'}`);
+      console.log(`  Attempt:     ${task.attempt}/${task.max_attempts}`);
+      console.log(`  Created:     ${task.created_at}`);
+      console.log(`  Updated:     ${task.updated_at}`);
+
+      if (task.error_message) {
+        console.log(`  Error:       ${task.error_message}`);
+      }
+      if (task.reviewer_feedback) {
+        console.log(`\n  Reviewer Feedback:\n${task.reviewer_feedback.split('\n').map(l => `    ${l}`).join('\n')}`);
+      }
+
+      const logs = repo.getLogs(task.id);
+      if (logs.length > 0) {
+        logger.header('Agent Logs');
+        for (const log of logs) {
+          console.log(`  [${log.created_at}] ${log.agent}/${log.action}`);
+          if (log.input_summary) console.log(`    Input:  ${log.input_summary}`);
+          if (log.output_summary) console.log(`    Output: ${log.output_summary}`);
+          if (log.tokens_used) console.log(`    Tokens: ${log.tokens_used}`);
+          if (log.duration_ms) console.log(`    Duration: ${log.duration_ms}ms`);
+        }
+      }
+    } catch (err) {
+      logger.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    } finally {
+      closeDatabase();
+    }
+  });
+
+program
+  .command('retry')
+  .description('Retry a failed task')
+  .argument('<task-id>', 'Task ID')
+  .option('--repo <path>', 'Override repository path')
+  .option('--model <model>', 'Claude model to use')
+  .option('--max-attempts <n>', 'Maximum coding attempts', parseInt)
+  .option('--auto-merge', 'Automatically merge into main branch')
+  .action(async (taskId: string, opts: { repo?: string; model?: string; maxAttempts?: number; autoMerge?: boolean }) => {
+    try {
+      const config = getConfig({
+        model: opts.model,
+        maxAttempts: opts.maxAttempts,
+        autoMerge: opts.autoMerge,
+      });
+      const db = getDatabase(config);
+      const repo = new TaskRepository(db);
+
+      const task = repo.getById(parseInt(taskId, 10));
+      if (!task) {
+        logger.error(`Task #${taskId} not found`);
+        process.exit(1);
+      }
+
+      const runner = new PipelineRunner(config, repo);
+      const result = await runner.retry(task.id, {
+        repoPath: opts.repo ? resolve(opts.repo) : task.repo_path,
+        model: config.model,
+        maxAttempts: config.maxAttempts,
+        autoMerge: config.autoMerge,
+      });
+
+      if (result.status === 'done') {
+        process.exit(0);
+      } else {
+        process.exit(1);
+      }
+    } catch (err) {
+      logger.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    } finally {
+      closeDatabase();
+    }
+  });
+
+program.parse();
