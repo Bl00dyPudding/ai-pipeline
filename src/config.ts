@@ -35,7 +35,7 @@ export function getConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     autoMerge: overrides.autoMerge
       ?? (process.env['AI_PIPELINE_AUTO_MERGE'] === 'true'),
     dbPath: overrides.dbPath
-      ?? resolve(process.env['AI_PIPELINE_DB_PATH'] ?? './ai-pipeline.db'),
+      ?? resolve(projectRoot, process.env['AI_PIPELINE_DB_PATH'] ?? 'ai-pipeline.db'),
   };
 
   if (!config.anthropicApiKey) {
