@@ -1,8 +1,14 @@
+/**
+ * Агент-кодер — генерирует изменения файлов по описанию задачи.
+ * Получает контекст репозитория + задачу (+ опционально фидбек), возвращает список файлов для изменения.
+ */
+
 import { BaseAgent } from './base.js';
 import { CODER_SYSTEM_PROMPT, buildCoderUserPrompt } from './prompts.js';
 import type { CoderOutput } from '../pipeline/types.js';
 import { logger } from '../utils/logger.js';
 
+/** Результат вызова кодера — ответ + метаинформация (токены, время) */
 export interface CoderCallResult {
   output: CoderOutput;
   tokensUsed: number;
@@ -14,6 +20,13 @@ export class CoderAgent extends BaseAgent {
     super(apiKey, model, 'coder');
   }
 
+  /**
+   * Генерирует изменения файлов для выполнения задачи.
+   * @param context — текстовый контекст репозитория (метаданные, дерево, ключевые файлы)
+   * @param taskDescription — описание задачи от пользователя
+   * @param feedback — фидбек от ревьюера/тестов с предыдущей попытки (если есть)
+   * @returns структурированный ответ с файлами для изменения
+   */
   async generate(
     context: string,
     taskDescription: string,
@@ -34,7 +47,7 @@ export class CoderAgent extends BaseAgent {
       throw new Error(`Coder returned invalid JSON: ${(err as Error).message}`);
     }
 
-    // Validate output structure
+    // Валидация структуры ответа — модель могла вернуть JSON неправильного формата
     if (!output.files || !Array.isArray(output.files)) {
       throw new Error('Coder output missing "files" array');
     }

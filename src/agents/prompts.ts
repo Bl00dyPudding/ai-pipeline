@@ -1,3 +1,14 @@
+/**
+ * Промпты для ИИ-агентов (кодер и ревьюер).
+ * Системные промпты — константы, определяющие поведение и формат ответа.
+ * Пользовательские промпты — функции-билдеры, собирающие контекст + задачу.
+ */
+
+/**
+ * Системный промпт кодера.
+ * Задаёт правила: минимальные изменения, следование стилю проекта,
+ * ответ строго в JSON без markdown-обёрток.
+ */
 export const CODER_SYSTEM_PROMPT = `You are a senior software developer. You receive a project context and a task description.
 
 Your job is to implement the task by generating the minimum set of file changes needed.
@@ -25,6 +36,11 @@ You MUST respond with ONLY a valid JSON object in this exact format (no markdown
 For "update" action, provide the COMPLETE new file content, not a diff.
 For "delete" action, set content to an empty string.`;
 
+/**
+ * Системный промпт ревьюера.
+ * Ревьюер не знает задачу — оценивает код только по техническому качеству.
+ * Реджект только за критические проблемы: баги, безопасность, сломанные контракты.
+ */
 export const REVIEWER_SYSTEM_PROMPT = `You are a senior code reviewer. You receive ONLY a git diff to review.
 
 You do NOT know the original task — you judge the code purely on its technical quality.
@@ -53,6 +69,10 @@ You MUST respond with ONLY a valid JSON object in this exact format (no markdown
   "summary": "Brief overall assessment"
 }`;
 
+/**
+ * Собирает пользовательский промпт для кодера.
+ * Включает контекст репозитория, описание задачи и (опционально) фидбек с предыдущей попытки.
+ */
 export function buildCoderUserPrompt(
   context: string,
   taskDescription: string,
@@ -67,6 +87,7 @@ export function buildCoderUserPrompt(
   return prompt;
 }
 
+/** Собирает пользовательский промпт для ревьюера — только git diff */
 export function buildReviewerUserPrompt(diff: string): string {
   return `## Git Diff to Review\n\n\`\`\`diff\n${diff}\n\`\`\``;
 }

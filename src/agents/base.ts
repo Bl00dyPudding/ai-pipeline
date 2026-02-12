@@ -1,7 +1,14 @@
+/**
+ * Базовый класс для всех ИИ-агентов.
+ * Инкапсулирует взаимодействие с Claude API: отправку запроса, парсинг JSON-ответа.
+ * Конкретные агенты (кодер, ревьюер) наследуют от BaseAgent.
+ */
+
 import Anthropic from '@anthropic-ai/sdk';
 import type { AgentRole } from '../pipeline/types.js';
 import { logger } from '../utils/logger.js';
 
+/** Результат вызова Claude API — текст ответа + использованные токены */
 export interface AgentCallResult {
   content: string;
   inputTokens: number;
@@ -19,6 +26,11 @@ export class BaseAgent {
     this.role = role;
   }
 
+  /**
+   * Отправляет запрос к Claude API.
+   * Принимает системный и пользовательский промпты, возвращает текст ответа и статистику токенов.
+   * max_tokens = 16384 — достаточно для генерации нескольких файлов.
+   */
   protected async call(systemPrompt: string, userPrompt: string): Promise<AgentCallResult> {
     logger.debug(`[${this.role}] Calling Claude API (model: ${this.model})...`);
 
@@ -40,8 +52,12 @@ export class BaseAgent {
     return { content, inputTokens, outputTokens };
   }
 
+  /**
+   * Парсит JSON из ответа модели.
+   * Снимает markdown code fences (```json ... ```), если модель их добавила,
+   * хотя промпт требует чистый JSON — это защита от нестабильного поведения.
+   */
   protected parseJSON<T>(raw: string): T {
-    // Strip markdown code fences if present
     let cleaned = raw.trim();
     if (cleaned.startsWith('```')) {
       cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');

@@ -1,3 +1,8 @@
+/**
+ * Git-операции над целевым репозиторием.
+ * Обёртка над simple-git для создания веток, коммитов, диффов и мержа.
+ */
+
 import { simpleGit, type SimpleGit } from 'simple-git';
 import { logger } from '../utils/logger.js';
 
@@ -10,6 +15,7 @@ export class GitOperations {
     this.git = simpleGit(repoPath);
   }
 
+  /** Проверяет, что рабочее дерево чистое — иначе пайплайн может затереть незакоммиченные изменения */
   async ensureClean(): Promise<void> {
     const status = await this.git.status();
     if (!status.isClean()) {
@@ -22,6 +28,11 @@ export class GitOperations {
     return branch.trim();
   }
 
+  /**
+   * Определяет основную ветку репозитория.
+   * Цепочка фолбеков: origin/HEAD → main → master → текущая ветка.
+   * origin/HEAD может быть не настроен (клон без --set-upstream), поэтому нужны фолбеки.
+   */
   async getDefaultBranch(): Promise<string> {
     try {
       const result = await this.git.raw(['symbolic-ref', 'refs/remotes/origin/HEAD', '--short']);
@@ -34,16 +45,21 @@ export class GitOperations {
     }
   }
 
+  /**
+   * Создаёт чистую ветку от main для новой попытки.
+   * Многошаговый процесс: переключиться на main → подтянуть изменения →
+   * удалить старую ветку (если осталась от предыдущей попытки) → создать новую.
+   */
   async createBranch(branchName: string): Promise<void> {
     const defaultBranch = await this.getDefaultBranch();
 
-    // Ensure we're on the default branch
     await this.git.checkout(defaultBranch);
+    // Pull с graceful catch — может не быть remote или сети
     await this.git.pull().catch(() => {
       logger.debug('Pull failed (may be offline or no remote), continuing...');
     });
 
-    // Delete branch if it already exists
+    // Удаляем ветку, если она осталась от предыдущего запуска
     const branches = await this.git.branchLocal();
     if (branches.all.includes(branchName)) {
       await this.git.deleteLocalBranch(branchName, true);
@@ -59,12 +75,22 @@ export class GitOperations {
     return result.commit;
   }
 
+  /**
+   * Получает diff между текущей веткой и main.
+   * Синтаксис triple-dot (base...HEAD) показывает изменения с момента ответвления,
+   * игнорируя коммиты, добавленные в main после создания ветки.
+   */
   async getDiff(baseBranch?: string): Promise<string> {
     const base = baseBranch ?? await this.getDefaultBranch();
     const diff = await this.git.diff([`${base}...HEAD`]);
     return diff;
   }
 
+  /**
+   * Мержит ветку в main.
+   * Флаг --no-ff создаёт merge-коммит даже при fast-forward,
+   * сохраняя историю отдельной ветки в графе коммитов.
+   */
   async mergeBranch(branchName: string): Promise<void> {
     const defaultBranch = await this.getDefaultBranch();
     await this.git.checkout(defaultBranch);

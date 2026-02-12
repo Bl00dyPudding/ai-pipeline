@@ -1,13 +1,27 @@
+/**
+ * Инициализация SQLite-базы данных.
+ * Используется singleton-паттерн: одно соединение на весь процесс,
+ * т.к. better-sqlite3 синхронный и не требует пула соединений.
+ */
+
 import Database from 'better-sqlite3';
 import { type AppConfig } from '../config.js';
 
+/** Единственный экземпляр соединения с БД */
 let db: Database.Database | null = null;
 
+/**
+ * Возвращает соединение с БД (создаёт при первом вызове).
+ * Включает WAL-режим для лучшей производительности при параллельном чтении/записи
+ * и foreign_keys для обеспечения ссылочной целостности (каскадное удаление логов).
+ */
 export function getDatabase(config: AppConfig): Database.Database {
   if (db) return db;
 
   db = new Database(config.dbPath);
+  // WAL (Write-Ahead Logging) — ускоряет запись, позволяет параллельное чтение
   db.pragma('journal_mode = WAL');
+  // Включаем проверку внешних ключей (по умолчанию в SQLite выключена)
   db.pragma('foreign_keys = ON');
 
   createTables(db);
@@ -15,6 +29,7 @@ export function getDatabase(config: AppConfig): Database.Database {
   return db;
 }
 
+/** Создаёт таблицы и индексы, если они ещё не существуют */
 function createTables(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS tasks (
@@ -50,6 +65,7 @@ function createTables(db: Database.Database): void {
   `);
 }
 
+/** Закрывает соединение с БД — вызывается при завершении CLI */
 export function closeDatabase(): void {
   if (db) {
     db.close();

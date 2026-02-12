@@ -1,11 +1,19 @@
+/**
+ * Запуск линтера и тестов в целевом репозитории.
+ * Определяет пакетный менеджер, проверяет наличие скриптов lint/test,
+ * запускает их и собирает результат.
+ */
+
 import { execFile } from 'node:child_process';
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { TestResult } from '../pipeline/types.js';
 import { logger } from '../utils/logger.js';
 
-const EXEC_TIMEOUT = 120_000; // 2 minutes
+/** Таймаут на выполнение lint/test — 2 минуты, достаточно для большинства проектов */
+const EXEC_TIMEOUT = 120_000;
 
+/** Обёртка над execFile с Promise-интерфейсом и нормализацией exit code */
 function runCommand(command: string, args: string[], cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve) => {
     execFile(command, args, { cwd, timeout: EXEC_TIMEOUT, shell: true }, (error, stdout, stderr) => {
@@ -27,12 +35,17 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * Определяет пакетный менеджер по наличию lock-файла.
+ * Приоритет: pnpm (pnpm-lock.yaml) → yarn (yarn.lock) → npm (по умолчанию).
+ */
 async function detectPackageManager(repoPath: string): Promise<'npm' | 'yarn' | 'pnpm'> {
   if (await fileExists(join(repoPath, 'pnpm-lock.yaml'))) return 'pnpm';
   if (await fileExists(join(repoPath, 'yarn.lock'))) return 'yarn';
   return 'npm';
 }
 
+/** Проверяет, есть ли скрипт с данным именем в package.json */
 async function hasScript(repoPath: string, scriptName: string): Promise<boolean> {
   try {
     const pkgPath = join(repoPath, 'package.json');
@@ -44,6 +57,10 @@ async function hasScript(repoPath: string, scriptName: string): Promise<boolean>
   }
 }
 
+/**
+ * Запускает lint и test в целевом репозитории.
+ * Если скрипт lint или test отсутствует в package.json — этап пропускается (не считается ошибкой).
+ */
 export async function runTests(repoPath: string): Promise<TestResult> {
   const pm = await detectPackageManager(repoPath);
 
@@ -52,7 +69,7 @@ export async function runTests(repoPath: string): Promise<TestResult> {
   let testOutput = '';
   let testPassed = true;
 
-  // Run lint
+  // Запуск линтера
   if (await hasScript(repoPath, 'lint')) {
     logger.debug('Running lint...');
     const lint = await runCommand(pm, ['run', 'lint'], repoPath);
@@ -64,7 +81,7 @@ export async function runTests(repoPath: string): Promise<TestResult> {
     logger.debug('No lint script found, skipping');
   }
 
-  // Run tests
+  // Запуск тестов
   if (await hasScript(repoPath, 'test')) {
     logger.debug('Running tests...');
     const test = await runCommand(pm, ['run', 'test'], repoPath);

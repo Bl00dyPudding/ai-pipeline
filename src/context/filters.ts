@@ -1,6 +1,12 @@
+/**
+ * Фильтрация файлов репозитория при сборе контекста.
+ * Определяет, какие файлы/директории пропускать, а какие считать важными.
+ */
+
 import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 
+/** Директории, полностью исключённые из обхода (зависимости, кеши, артефакты сборки) */
 const IGNORE_DIRS = new Set([
   'node_modules',
   '.git',
@@ -18,6 +24,7 @@ const IGNORE_DIRS = new Set([
   'vendor',
 ]);
 
+/** Расширения файлов, исключённых из дерева и контекста (бинарные, lock-файлы, минифицированные) */
 const IGNORE_EXTENSIONS = new Set([
   '.lock',
   '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp',
@@ -30,6 +37,7 @@ const IGNORE_EXTENSIONS = new Set([
   '.map',
 ]);
 
+/** Расширения бинарных файлов — помечаются как [binary], не читаются */
 const BINARY_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico',
   '.woff', '.woff2', '.ttf', '.eot',
@@ -38,6 +46,7 @@ const BINARY_EXTENSIONS = new Set([
   '.pdf', '.db', '.sqlite', '.exe', '.dll', '.so', '.dylib',
 ]);
 
+/** Проверяет, нужно ли пропустить директорию (включая скрытые, начинающиеся с точки) */
 export function shouldIgnoreDir(dirName: string): boolean {
   return IGNORE_DIRS.has(dirName) || dirName.startsWith('.');
 }
@@ -46,7 +55,7 @@ export function shouldIgnoreFile(filePath: string): boolean {
   const ext = extname(filePath).toLowerCase();
   if (IGNORE_EXTENSIONS.has(ext)) return true;
 
-  // Check for compound extensions like .min.js
+  // Проверка составных расширений вроде .min.js
   const base = filePath.toLowerCase();
   if (base.endsWith('.min.js') || base.endsWith('.min.css')) return true;
 
@@ -58,6 +67,10 @@ export function isBinaryFile(filePath: string): boolean {
   return BINARY_EXTENSIONS.has(ext);
 }
 
+/**
+ * Безопасно читает файл с лимитом в 100КБ.
+ * При ошибке (нет доступа, файл удалён) возвращает null вместо выброса исключения.
+ */
 export async function safeReadFile(filePath: string, maxSizeBytes = 100_000): Promise<string | null> {
   try {
     const content = await readFile(filePath, 'utf-8');
@@ -70,6 +83,7 @@ export async function safeReadFile(filePath: string, maxSizeBytes = 100_000): Pr
   }
 }
 
+/** Конфигурационные файлы проекта — читаются первыми как метаданные */
 const METADATA_FILES = [
   'package.json',
   'tsconfig.json',
@@ -91,6 +105,7 @@ const METADATA_FILES = [
   'CLAUDE.md',
 ];
 
+/** Паттерны точек входа — файлы, с которых начинается приложение */
 const ENTRY_POINT_PATTERNS = [
   'src/main.ts', 'src/main.js',
   'src/index.ts', 'src/index.js',

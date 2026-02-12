@@ -1,5 +1,11 @@
 #!/usr/bin/env node
 
+/**
+ * Точка входа CLI — определяет команды: run, tasks, show, retry.
+ * Паттерн каждой команды: getConfig → getDatabase → действие → closeDatabase.
+ * Коды завершения: 0 — успех (done), 1 — ошибка или failed.
+ */
+
 import { resolve } from 'node:path';
 import { Command } from 'commander';
 import { getConfig } from './config.js';
@@ -16,6 +22,7 @@ program
   .description('Multi-agent AI coding pipeline: task → code → review → test → merge')
   .version('1.0.0');
 
+/** Команда run — запускает задачу через полный цикл пайплайна */
 program
   .command('run')
   .description('Run a task through the AI pipeline')
@@ -55,6 +62,7 @@ program
     }
   });
 
+/** Команда tasks — выводит список всех задач с фильтрацией по статусу */
 program
   .command('tasks')
   .description('List all tasks')
@@ -84,6 +92,7 @@ program
     }
   });
 
+/** Команда show — показывает детали задачи и логи всех агентов */
 program
   .command('show')
   .description('Show task details and agent logs')
@@ -135,6 +144,7 @@ program
     }
   });
 
+/** Команда retry — повторяет упавшую задачу с возможностью изменить параметры */
 program
   .command('retry')
   .description('Retry a failed task')

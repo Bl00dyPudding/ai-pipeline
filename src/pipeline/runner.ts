@@ -1,3 +1,9 @@
+/**
+ * Оркестратор пайплайна — управляет полным циклом: задача → код → ревью → тесты → мерж.
+ * Реализует стейт-машину с петлёй обратной связи: при реджекте или провале тестов
+ * кодер получает фидбек и пробует заново (до maxAttempts попыток).
+ */
+
 import { writeFile, mkdir, rm } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import type { AppConfig } from '../config.js';
@@ -23,8 +29,16 @@ export class PipelineRunner {
     this.reviewer = new ReviewerAgent(config.anthropicApiKey, config.model);
   }
 
+  /**
+   * Запускает полный цикл пайплайна.
+   * Алгоритм: создать задачу → для каждой попытки (1..maxAttempts):
+   *   1. Кодинг: собрать контекст → сгенерировать код → закоммитить в ветку
+   *   2. Ревью: получить diff → отправить ревьюеру → при реджекте — к шагу 1 с фидбеком
+   *   3. Тесты: запустить lint + test → при провале — к шагу 1 с выводом ошибок
+   *   4. Мерж: (если autoMerge) влить ветку в main
+   */
   async run(taskDescription: string, options: PipelineOptions): Promise<TaskRecord> {
-    // Create task
+    // Создаём задачу в БД
     const task = this.repo.create({
       title: taskDescription.slice(0, 100),
       description: taskDescription,
@@ -38,15 +52,17 @@ export class PipelineRunner {
       const git = new GitOperations(options.repoPath);
       await git.ensureClean();
 
+      /** Фидбек от ревьюера/тестов — передаётся кодеру при следующей попытке */
       let feedback: string | undefined;
 
       for (let attempt = 1; attempt <= options.maxAttempts; attempt++) {
+        // Каждая попытка — чистая ветка от main
         const branchName = `ai/task-${task.id}-attempt-${attempt}`;
         this.repo.updateAttempt(task.id, attempt, branchName);
 
         logger.info(`Attempt ${attempt}/${options.maxAttempts}`);
 
-        // === CODING ===
+        // === ФАЗА КОДИНГА ===
         this.repo.updateStatus(task.id, 'coding');
         const spinner = logger.spin('Generating code...');
 
@@ -66,13 +82,13 @@ export class PipelineRunner {
           durationMs: coderResult.durationMs,
         });
 
-        // Create branch and apply changes
+        // Создаём ветку от main и применяем изменения
         await git.createBranch(branchName);
         await this.applyFileChanges(options.repoPath, coderResult.output.files);
         await git.commitAll(coderResult.output.commitMessage);
         logger.success(`Committed to branch: ${branchName}`);
 
-        // === REVIEWING ===
+        // === ФАЗА РЕВЬЮ ===
         this.repo.updateStatus(task.id, 'reviewing');
         const reviewSpinner = logger.spin('Reviewing code...');
 
@@ -90,6 +106,7 @@ export class PipelineRunner {
           durationMs: reviewResult.durationMs,
         });
 
+        // При реджекте — сохраняем фидбек и переходим к следующей попытке
         if (reviewResult.output.decision === 'reject') {
           feedback = this.formatReviewFeedback(reviewResult.output);
           this.repo.setReviewerFeedback(task.id, feedback);
@@ -100,7 +117,7 @@ export class PipelineRunner {
           continue;
         }
 
-        // === TESTING ===
+        // === ФАЗА ТЕСТИРОВАНИЯ ===
         this.repo.updateStatus(task.id, 'testing');
         const testSpinner = logger.spin('Running tests...');
 
@@ -117,6 +134,7 @@ export class PipelineRunner {
           durationMs: 0,
         });
 
+        // При провале тестов — сохраняем вывод ошибок как фидбек для кодера
         if (!testResult.passed) {
           feedback = `Tests/lint failed:\n\nLint output:\n${testResult.lintOutput}\n\nTest output:\n${testResult.testOutput}`;
           this.repo.setReviewerFeedback(task.id, feedback);
@@ -124,7 +142,7 @@ export class PipelineRunner {
           continue;
         }
 
-        // === MERGE ===
+        // === ФАЗА МЕРЖА ===
         if (options.autoMerge) {
           await git.mergeBranch(branchName);
           logger.success(`Merged ${branchName} into main`);
@@ -146,7 +164,7 @@ export class PipelineRunner {
         return this.repo.getById(task.id)!;
       }
 
-      // All attempts exhausted
+      // Все попытки исчерпаны — задача переходит в статус failed
       this.repo.setError(task.id, `Failed after ${options.maxAttempts} attempts`);
       logger.error(`Task #${task.id} failed after ${options.maxAttempts} attempts`);
       return this.repo.getById(task.id)!;
@@ -159,16 +177,21 @@ export class PipelineRunner {
     }
   }
 
+  /** Повторяет упавшую задачу — сбрасывает статус и запускает пайплайн заново */
   async retry(taskId: number, options: PipelineOptions): Promise<TaskRecord> {
     const task = this.repo.getById(taskId);
     if (!task) throw new Error(`Task #${taskId} not found`);
     if (task.status !== 'failed') throw new Error(`Task #${taskId} is not in failed state`);
 
-    // Reset task
     this.repo.updateStatus(taskId, 'pending');
     return this.run(task.description, options);
   }
 
+  /**
+   * Применяет изменения файлов от кодера к рабочему дереву.
+   * create/update — создаёт директории (если нужно) и записывает файл.
+   * delete — удаляет файл.
+   */
   private async applyFileChanges(
     repoPath: string,
     files: Array<{ path: string; action: string; content: string }>,
@@ -187,6 +210,7 @@ export class PipelineRunner {
     }
   }
 
+  /** Форматирует фидбек ревьюера в текст для передачи кодеру при повторной попытке */
   private formatReviewFeedback(review: { issues: Array<{ severity: string; file: string; line: number | null; message: string }>; summary: string }): string {
     const lines = [`Review summary: ${review.summary}`, '', 'Issues:'];
     for (const issue of review.issues) {

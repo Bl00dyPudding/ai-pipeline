@@ -1,3 +1,9 @@
+/**
+ * Сбор контекста целевого репозитория для промпта агента-кодера.
+ * Контекст собирается в 4 этапа: метаданные → дерево файлов → ключевые файлы → доп. файлы.
+ * Каждый этап ограничен бюджетом токенов, чтобы не превысить лимит промпта.
+ */
+
 import { readdir, stat } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import {
@@ -12,22 +18,27 @@ import { estimateTokens, fitWithinBudget, truncateToTokenBudget, TOKEN_BUDGETS }
 import type { RepoContext } from '../pipeline/types.js';
 import { logger } from '../utils/logger.js';
 
+/** Максимальное кол-во записей в дереве файлов — защита от огромных репозиториев */
 const MAX_TREE_ENTRIES = 500;
 
+/**
+ * Собирает контекст репозитория для передачи кодеру.
+ * 4 этапа: метаданные (package.json и др.) → дерево файлов → ключевые файлы → доп. файлы по импортам.
+ */
 export async function gatherContext(repoPath: string, taskDescription: string): Promise<RepoContext> {
   logger.debug('Gathering repository context...');
 
-  // 1. Metadata
+  // 1. Метаданные — конфигурационные файлы проекта
   const metadata = await gatherMetadata(repoPath);
 
-  // 2. File tree
+  // 2. Дерево файлов — структура репозитория
   const allFiles = await buildFileTree(repoPath);
   const fileTree = formatFileTree(allFiles, repoPath);
 
-  // 3. Key files — entry points + files mentioned in task
+  // 3. Ключевые файлы — точки входа, типы, файлы по ключевым словам задачи
   const keyFiles = await gatherKeyFiles(repoPath, allFiles, taskDescription);
 
-  // 4. Extra files — expand by imports if budget allows
+  // 4. Дополнительные файлы — найденные по import/from в ключевых файлах
   const extraFiles = await gatherExtraFiles(repoPath, allFiles, keyFiles);
 
   const totalTokens =
@@ -41,6 +52,7 @@ export async function gatherContext(repoPath: string, taskDescription: string): 
   return { metadata, fileTree, keyFiles, extraFiles, totalTokens };
 }
 
+/** Читает конфигурационные файлы проекта (package.json, tsconfig и т.д.) */
 async function gatherMetadata(repoPath: string): Promise<string> {
   const parts: string[] = [];
 
@@ -54,6 +66,10 @@ async function gatherMetadata(repoPath: string): Promise<string> {
   return truncateToTokenBudget(parts.join('\n\n'), TOKEN_BUDGETS.metadata);
 }
 
+/**
+ * Рекурсивно обходит директории, собирая список текстовых файлов.
+ * Ограничения: глубина вложенности maxDepth, максимум MAX_TREE_ENTRIES файлов.
+ */
 async function buildFileTree(repoPath: string, maxDepth = 6): Promise<string[]> {
   const files: string[] = [];
 
@@ -84,11 +100,18 @@ async function buildFileTree(repoPath: string, maxDepth = 6): Promise<string[]> 
   return files.sort();
 }
 
+/** Форматирует список файлов в текстовое дерево для промпта */
 function formatFileTree(files: string[], repoPath: string): string {
   const tree = files.map(f => `  ${f}`).join('\n');
   return truncateToTokenBudget(`File tree (${files.length} files):\n${tree}`, TOKEN_BUDGETS.fileTree);
 }
 
+/**
+ * Собирает ключевые файлы по 3 стратегиям:
+ * 1. Точки входа (src/index.ts, src/App.vue и т.д.)
+ * 2. Файлы, название которых совпадает с ключевыми словами задачи
+ * 3. Файлы типов (.d.ts, types.ts)
+ */
 async function gatherKeyFiles(
   repoPath: string,
   allFiles: string[],
@@ -97,7 +120,7 @@ async function gatherKeyFiles(
   const keyFiles = new Map<string, string>();
   const taskWords = taskDescription.toLowerCase().split(/\s+/);
 
-  // Add entry points
+  // Стратегия 1: точки входа приложения
   for (const pattern of ENTRY_POINT_PATTERNS) {
     const matches = allFiles.filter(f => f.includes(pattern));
     for (const match of matches) {
@@ -106,7 +129,7 @@ async function gatherKeyFiles(
     }
   }
 
-  // Add files matching task keywords
+  // Стратегия 2: файлы, связанные с задачей по ключевым словам (слова длиннее 3 символов)
   for (const file of allFiles) {
     const fileLower = file.toLowerCase();
     const isRelevant = taskWords.some(word =>
@@ -118,7 +141,7 @@ async function gatherKeyFiles(
     }
   }
 
-  // Add type definition files
+  // Стратегия 3: файлы определений типов — важны для понимания структуры проекта
   for (const file of allFiles) {
     if (file.endsWith('.d.ts') || file.includes('types.ts') || file.includes('types/')) {
       const content = await safeReadFile(join(repoPath, file));
@@ -129,6 +152,10 @@ async function gatherKeyFiles(
   return fitWithinBudget(keyFiles, TOKEN_BUDGETS.keyFiles);
 }
 
+/**
+ * Расширяет контекст файлами, которые импортируются из ключевых.
+ * Находит относительные import/from, резолвит пути к реальным файлам.
+ */
 async function gatherExtraFiles(
   repoPath: string,
   allFiles: string[],
@@ -137,19 +164,20 @@ async function gatherExtraFiles(
   const extraFiles = new Map<string, string>();
   const importPattern = /(?:import|from)\s+['"]([^'"]+)['"]/g;
 
-  // Extract imports from key files
+  // Извлекаем пути из import/from в ключевых файлах
   const importedPaths = new Set<string>();
   for (const [, content] of keyFiles) {
     let match;
     while ((match = importPattern.exec(content)) !== null) {
       const importPath = match[1];
+      // Только относительные импорты — пакеты из node_modules не нужны
       if (importPath.startsWith('.')) {
         importedPaths.add(importPath);
       }
     }
   }
 
-  // Resolve imports to actual files
+  // Сопоставляем пути импортов с реальными файлами в репозитории
   for (const importPath of importedPaths) {
     const candidates = allFiles.filter(f => {
       const normalized = importPath.replace(/^\.\//, '');
@@ -166,6 +194,7 @@ async function gatherExtraFiles(
   return fitWithinBudget(extraFiles, TOKEN_BUDGETS.extraFiles);
 }
 
+/** Подсчитывает суммарное количество токенов в Map (ключи + значения) */
 function sumMapTokens(map: Map<string, string>): number {
   let total = 0;
   for (const [key, value] of map) {
@@ -174,6 +203,7 @@ function sumMapTokens(map: Map<string, string>): number {
   return total;
 }
 
+/** Форматирует собранный контекст в текст для вставки в промпт кодера */
 export function formatContextForPrompt(context: RepoContext): string {
   const parts: string[] = [];
 
