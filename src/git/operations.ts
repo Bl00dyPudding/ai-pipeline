@@ -12,7 +12,9 @@ export class GitOperations {
 
   constructor(repoPath: string) {
     this.repoPath = repoPath;
-    this.git = simpleGit(repoPath);
+    this.git = simpleGit(repoPath, {
+      config: [],
+    }).env('GIT_TERMINAL_PROMPT', '0');
   }
 
   /** Проверяет, что рабочее дерево чистое — иначе пайплайн может затереть незакоммиченные изменения */

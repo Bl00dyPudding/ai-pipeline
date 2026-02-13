@@ -72,6 +72,10 @@ export class PipelineRunner {
         const coderResult = await this.coder.generate(contextText, taskDescription, feedback);
         spinner.succeed('Code generated');
 
+        if (coderResult.output.thinking) {
+          logger.step(`Coder: ${coderResult.output.thinking}`);
+        }
+
         this.repo.addLog({
           taskId: task.id,
           agent: 'coder',
@@ -122,7 +126,11 @@ export class PipelineRunner {
         const testSpinner = logger.spin('Running tests...');
 
         const testResult = await runTests(options.repoPath);
-        testSpinner.succeed(`Tests: ${testResult.summary}`);
+        if (testResult.passed) {
+          testSpinner.succeed(`Tests: ${testResult.summary}`);
+        } else {
+          testSpinner.fail(`Tests: ${testResult.summary}`);
+        }
 
         this.repo.addLog({
           taskId: task.id,
