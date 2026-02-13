@@ -22,7 +22,9 @@ import type { Task } from '../api/client';
 defineProps<{ tasks: Task[] }>();
 
 function formatTime(iso: string): string {
-  const d = new Date(iso + 'Z');
+  if (!iso) return '';
+  const d = new Date(iso.replace(' ', 'T') + 'Z');
+  if (isNaN(d.getTime())) return iso;
   return d.toLocaleString(undefined, {
     month: 'short', day: 'numeric',
     hour: '2-digit', minute: '2-digit',
