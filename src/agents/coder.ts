@@ -35,17 +35,10 @@ export class CoderAgent extends BaseAgent {
     const userPrompt = buildCoderUserPrompt(context, taskDescription, feedback);
     const start = Date.now();
 
-    const result = await this.call(CODER_SYSTEM_PROMPT, userPrompt);
+    const { parsed: output, tokensUsed } = await this.callWithRetry<CoderOutput>(
+      CODER_SYSTEM_PROMPT, userPrompt,
+    );
     const durationMs = Date.now() - start;
-
-    let output: CoderOutput;
-    try {
-      output = this.parseJSON<CoderOutput>(result.content);
-    } catch (err) {
-      logger.error('Failed to parse coder response as JSON');
-      logger.debug(`Raw response: ${result.content.slice(0, 500)}`);
-      throw new Error(`Coder returned invalid JSON: ${(err as Error).message}`);
-    }
 
     // Валидация структуры ответа — модель могла вернуть JSON неправильного формата
     if (!output.files || !Array.isArray(output.files)) {
@@ -57,10 +50,6 @@ export class CoderAgent extends BaseAgent {
 
     logger.debug(`Coder generated ${output.files.length} file change(s)`);
 
-    return {
-      output,
-      tokensUsed: result.inputTokens + result.outputTokens,
-      durationMs,
-    };
+    return { output, tokensUsed, durationMs };
   }
 }

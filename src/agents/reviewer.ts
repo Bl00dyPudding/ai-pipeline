@@ -29,17 +29,10 @@ export class ReviewerAgent extends BaseAgent {
     const userPrompt = buildReviewerUserPrompt(diff);
     const start = Date.now();
 
-    const result = await this.call(REVIEWER_SYSTEM_PROMPT, userPrompt);
+    const { parsed: output, tokensUsed } = await this.callWithRetry<ReviewerOutput>(
+      REVIEWER_SYSTEM_PROMPT, userPrompt,
+    );
     const durationMs = Date.now() - start;
-
-    let output: ReviewerOutput;
-    try {
-      output = this.parseJSON<ReviewerOutput>(result.content);
-    } catch (err) {
-      logger.error('Failed to parse reviewer response as JSON');
-      logger.debug(`Raw response: ${result.content.slice(0, 500)}`);
-      throw new Error(`Reviewer returned invalid JSON: ${(err as Error).message}`);
-    }
 
     // Валидация: decision должен быть строго approve или reject
     if (!output.decision || !['approve', 'reject'].includes(output.decision)) {
@@ -51,10 +44,6 @@ export class ReviewerAgent extends BaseAgent {
       `Reviewer decision: ${output.decision} (${output.issues.length} issues, ${criticalCount} critical)`
     );
 
-    return {
-      output,
-      tokensUsed: result.inputTokens + result.outputTokens,
-      durationMs,
-    };
+    return { output, tokensUsed, durationMs };
   }
 }

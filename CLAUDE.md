@@ -45,7 +45,7 @@ ai-pipeline/
 │   │   └── runner.ts         # PipelineRunner — стейт-машина: coding → reviewing → testing → done
 │   │
 │   ├── agents/
-│   │   ├── base.ts           # BaseAgent — Anthropic SDK client, call(), parseJSON()
+│   │   ├── base.ts           # BaseAgent — Anthropic SDK client, call(), callWithRetry(), parseJSON()
 │   │   ├── coder.ts          # CoderAgent extends BaseAgent — generate()
 │   │   ├── reviewer.ts       # ReviewerAgent extends BaseAgent — review()
 │   │   └── prompts.ts        # CODER_SYSTEM_PROMPT, REVIEWER_SYSTEM_PROMPT, билдеры user prompt
@@ -94,7 +94,7 @@ ai-pipeline/
    import { logger } from '../utils/logger';
    ```
 
-5. **Агенты наследуют `BaseAgent`**. Не создавай агентов без наследования.
+5. **Агенты наследуют `BaseAgent`**. Не создавай агентов без наследования. Для вызова API с парсингом JSON используй `callWithRetry()` — он автоматически ретраит при ошибке парсинга (до 2 попыток), но не ретраит при `stop_reason === 'max_tokens'`.
 
 6. **Логирование через `logger`**, не через `console.log` напрямую (кроме `console.table` в logger.ts).
 
@@ -331,7 +331,8 @@ ai-pipeline run "задача" --repo ~/project
 |--------|---------|---------|
 | `ANTHROPIC_API_KEY is required` | Нет `.env` в корне ai-pipeline | Создать `.env` рядом с `package.json` (не в cwd) |
 | `Repository has uncommitted changes` | Грязное рабочее дерево | `git stash` или `git commit` |
-| `Coder returned invalid JSON` | Модель не вернула JSON | Повторить через `retry` |
+| `Coder returned invalid JSON after N attempts` | Модель не вернула JSON даже после ретрая | Повторить через `retry` |
+| `... returned truncated response (max_tokens)` | Ответ обрезан лимитом токенов | Упростить задачу или увеличить `max_tokens` |
 | `This expression is not callable` при импорте simple-git | Неправильный импорт | Использовать `import { simpleGit }` (named export) |
 | ERR_MODULE_NOT_FOUND | Импорт без `.js` | Добавить `.js` к относительным импортам |
 | `Cannot find module` | Не скомпилировано | Выполнить `npm run build` |

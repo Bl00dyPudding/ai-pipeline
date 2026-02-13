@@ -13,6 +13,7 @@ export interface AgentCallResult {
   content: string;
   inputTokens: number;
   outputTokens: number;
+  stopReason: string | null;
 }
 
 export class BaseAgent {
@@ -49,7 +50,50 @@ export class BaseAgent {
 
     logger.debug(`[${this.role}] Tokens: ${inputTokens} in / ${outputTokens} out`);
 
-    return { content, inputTokens, outputTokens };
+    return { content, inputTokens, outputTokens, stopReason: response.stop_reason };
+  }
+
+  /**
+   * Обёртка над call() + parseJSON() с ретраем при ошибке парсинга.
+   * Если stop_reason === 'max_tokens' — ответ обрезан лимитом, повтор не поможет.
+   * Если stop_reason === 'end_turn' и парсинг упал — ретраим (транзиентная ошибка модели).
+   * Суммирует токены по всем попыткам.
+   */
+  protected async callWithRetry<T>(
+    systemPrompt: string,
+    userPrompt: string,
+    maxRetries: number = 2,
+  ): Promise<{ parsed: T; tokensUsed: number }> {
+    let totalTokens = 0;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      const result = await this.call(systemPrompt, userPrompt);
+      totalTokens += result.inputTokens + result.outputTokens;
+
+      try {
+        const parsed = this.parseJSON<T>(result.content);
+        return { parsed, tokensUsed: totalTokens };
+      } catch (err) {
+        if (result.stopReason === 'max_tokens') {
+          logger.error(`[${this.role}] Response truncated (max_tokens), retry won't help`);
+          logger.debug(`Raw response: ${result.content.slice(0, 500)}`);
+          throw new Error(`${this.role} returned truncated response (max_tokens): ${(err as Error).message}`);
+        }
+
+        if (attempt < maxRetries) {
+          logger.warn(`[${this.role}] JSON parse failed (attempt ${attempt}/${maxRetries}), retrying...`);
+          logger.debug(`Raw response: ${result.content.slice(0, 500)}`);
+          continue;
+        }
+
+        logger.error(`[${this.role}] JSON parse failed after ${maxRetries} attempts`);
+        logger.debug(`Raw response: ${result.content.slice(0, 500)}`);
+        throw new Error(`${this.role} returned invalid JSON after ${maxRetries} attempts: ${(err as Error).message}`);
+      }
+    }
+
+    // Unreachable, но TypeScript требует return
+    throw new Error(`${this.role} callWithRetry: unexpected end of loop`);
   }
 
   /**
@@ -59,8 +103,13 @@ export class BaseAgent {
    */
   protected parseJSON<T>(raw: string): T {
     let cleaned = raw.trim();
+    // Снимаем открывающий и закрывающий fence независимо —
+    // модель может оборвать ответ без закрывающего ```
     if (cleaned.startsWith('```')) {
-      cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+      cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '');
+    }
+    if (cleaned.endsWith('```')) {
+      cleaned = cleaned.replace(/\n?```\s*$/, '');
     }
     return JSON.parse(cleaned) as T;
   }
