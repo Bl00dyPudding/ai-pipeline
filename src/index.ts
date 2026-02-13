@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Точка входа CLI — определяет команды: run, tasks, show, retry.
+ * Точка входа CLI — определяет команды: run, add, process, tasks, show, retry.
  * Паттерн каждой команды: getConfig → getDatabase → действие → closeDatabase.
  * Коды завершения: 0 — успех (done), 1 — ошибка или failed.
  */
@@ -52,6 +52,100 @@ program
       if (task.status === 'done') {
         process.exit(0);
       } else {
+        process.exit(1);
+      }
+    } catch (err) {
+      logger.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    } finally {
+      closeDatabase();
+    }
+  });
+
+/** Команда add — добавляет задачу в очередь без запуска пайплайна */
+program
+  .command('add')
+  .description('Add a task to the queue without running it')
+  .argument('<description>', 'Task description')
+  .requiredOption('--repo <path>', 'Path to target repository')
+  .option('--max-attempts <n>', 'Maximum coding attempts', parseInt)
+  .option('--auto-merge', 'Automatically merge into main branch')
+  .action((description: string, opts: { repo: string; maxAttempts?: number; autoMerge?: boolean }) => {
+    try {
+      const config = getConfig({
+        maxAttempts: opts.maxAttempts,
+        autoMerge: opts.autoMerge,
+      });
+      const db = getDatabase(config);
+      const repo = new TaskRepository(db);
+
+      const task = repo.create({
+        title: description.slice(0, 100),
+        description,
+        repoPath: resolve(opts.repo),
+        maxAttempts: config.maxAttempts,
+      });
+
+      logger.success(`Task #${task.id} added: ${task.title}`);
+    } catch (err) {
+      logger.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    } finally {
+      closeDatabase();
+    }
+  });
+
+/** Команда process — последовательно выполняет pending-задачи из очереди */
+program
+  .command('process')
+  .description('Process pending tasks from the queue')
+  .requiredOption('--repo <path>', 'Path to target repository')
+  .option('--model <model>', 'Claude model to use')
+  .option('--max-attempts <n>', 'Maximum coding attempts', parseInt)
+  .option('--auto-merge', 'Automatically merge into main branch')
+  .option('--limit <n>', 'Maximum number of tasks to process', parseInt)
+  .action(async (opts: { repo: string; model?: string; maxAttempts?: number; autoMerge?: boolean; limit?: number }) => {
+    try {
+      const config = getConfig({
+        model: opts.model,
+        maxAttempts: opts.maxAttempts,
+        autoMerge: opts.autoMerge,
+      });
+      const db = getDatabase(config);
+      const repo = new TaskRepository(db);
+      const repoPath = resolve(opts.repo);
+
+      const tasks = repo.listPending(repoPath, opts.limit);
+      if (tasks.length === 0) {
+        logger.info('No pending tasks found for this repository');
+        return;
+      }
+
+      logger.header(`Processing ${tasks.length} pending task(s)`);
+
+      const runner = new PipelineRunner(config, repo);
+      let doneCount = 0;
+      let failedCount = 0;
+
+      for (const task of tasks) {
+        const result = await runner.runExisting(task.id, {
+          repoPath,
+          model: config.model,
+          maxAttempts: opts.maxAttempts ?? task.max_attempts,
+          autoMerge: config.autoMerge,
+        });
+
+        if (result.status === 'done') {
+          doneCount++;
+        } else {
+          failedCount++;
+        }
+      }
+
+      logger.header('Summary');
+      logger.info(`Done: ${doneCount}, Failed: ${failedCount}, Total: ${tasks.length}`);
+
+      if (failedCount > 0) {
         process.exit(1);
       }
     } catch (err) {

@@ -237,8 +237,14 @@ interface AppConfig {
 ## CLI-команды
 
 ```bash
-# Запуск задачи
+# Запуск задачи (создать + выполнить сразу)
 ai-pipeline run <описание> --repo <путь> [--model <m>] [--max-attempts <n>] [--auto-merge]
+
+# Добавить задачу в очередь (без запуска)
+ai-pipeline add <описание> --repo <путь> [--max-attempts <n>] [--auto-merge]
+
+# Выполнить pending-задачи из очереди последовательно
+ai-pipeline process --repo <путь> [--model <m>] [--max-attempts <n>] [--auto-merge] [--limit <n>]
 
 # Список задач
 ai-pipeline tasks [--status <pending|coding|reviewing|testing|done|failed>]

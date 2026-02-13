@@ -101,6 +101,15 @@ export class TaskRepository {
     );
   }
 
+  /** Возвращает pending-задачи для указанного репозитория в FIFO-порядке (старые первыми) */
+  listPending(repoPath: string, limit?: number): TaskRecord[] {
+    const sql = limit
+      ? 'SELECT * FROM tasks WHERE status = ? AND repo_path = ? ORDER BY created_at ASC LIMIT ?'
+      : 'SELECT * FROM tasks WHERE status = ? AND repo_path = ? ORDER BY created_at ASC';
+    const stmt = this.db.prepare(sql);
+    return (limit ? stmt.all('pending', repoPath, limit) : stmt.all('pending', repoPath)) as TaskRecord[];
+  }
+
   /** Возвращает все логи задачи в хронологическом порядке */
   getLogs(taskId: number): TaskLogRecord[] {
     const stmt = this.db.prepare('SELECT * FROM task_logs WHERE task_id = ? ORDER BY created_at ASC');

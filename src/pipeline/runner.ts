@@ -30,15 +30,9 @@ export class PipelineRunner {
   }
 
   /**
-   * Запускает полный цикл пайплайна.
-   * Алгоритм: создать задачу → для каждой попытки (1..maxAttempts):
-   *   1. Кодинг: собрать контекст → сгенерировать код → закоммитить в ветку
-   *   2. Ревью: получить diff → отправить ревьюеру → при реджекте — к шагу 1 с фидбеком
-   *   3. Тесты: запустить lint + test → при провале — к шагу 1 с выводом ошибок
-   *   4. Мерж: (если autoMerge) влить ветку в main
+   * Запускает полный цикл пайплайна: создаёт задачу в БД и выполняет её.
    */
   async run(taskDescription: string, options: PipelineOptions): Promise<TaskRecord> {
-    // Создаём задачу в БД
     const task = this.repo.create({
       title: taskDescription.slice(0, 100),
       description: taskDescription,
@@ -46,6 +40,39 @@ export class PipelineRunner {
       maxAttempts: options.maxAttempts,
     });
 
+    return this.execute(task, options);
+  }
+
+  /**
+   * Выполняет уже существующую задачу из БД (для команды process).
+   */
+  async runExisting(taskId: number, options: PipelineOptions): Promise<TaskRecord> {
+    const task = this.repo.getById(taskId);
+    if (!task) throw new Error(`Task #${taskId} not found`);
+    if (task.status !== 'pending') throw new Error(`Task #${taskId} is not in pending state`);
+
+    return this.execute(task, options);
+  }
+
+  /** Повторяет упавшую задачу — сбрасывает статус и запускает пайплайн заново */
+  async retry(taskId: number, options: PipelineOptions): Promise<TaskRecord> {
+    const task = this.repo.getById(taskId);
+    if (!task) throw new Error(`Task #${taskId} not found`);
+    if (task.status !== 'failed') throw new Error(`Task #${taskId} is not in failed state`);
+
+    this.repo.updateStatus(taskId, 'pending');
+    return this.execute(task, { ...options, repoPath: task.repo_path });
+  }
+
+  /**
+   * Внутренний метод — выполняет полный цикл пайплайна для задачи.
+   * Алгоритм: для каждой попытки (1..maxAttempts):
+   *   1. Кодинг: собрать контекст → сгенерировать код → закоммитить в ветку
+   *   2. Ревью: получить diff → отправить ревьюеру → при реджекте — к шагу 1 с фидбеком
+   *   3. Тесты: запустить lint + test → при провале — к шагу 1 с выводом ошибок
+   *   4. Мерж: (если autoMerge) влить ветку в main
+   */
+  private async execute(task: TaskRecord, options: PipelineOptions): Promise<TaskRecord> {
     logger.header(`Task #${task.id}: ${task.title}`);
 
     try {
@@ -66,10 +93,10 @@ export class PipelineRunner {
         this.repo.updateStatus(task.id, 'coding');
         const spinner = logger.spin('Generating code...');
 
-        const context = await gatherContext(options.repoPath, taskDescription);
+        const context = await gatherContext(options.repoPath, task.description);
         const contextText = formatContextForPrompt(context);
 
-        const coderResult = await this.coder.generate(contextText, taskDescription, feedback);
+        const coderResult = await this.coder.generate(contextText, task.description, feedback);
         spinner.succeed('Code generated');
 
         if (coderResult.output.thinking) {
@@ -80,7 +107,7 @@ export class PipelineRunner {
           taskId: task.id,
           agent: 'coder',
           action: 'generate',
-          inputSummary: `Task: ${taskDescription.slice(0, 200)}${feedback ? ' + feedback' : ''}`,
+          inputSummary: `Task: ${task.description.slice(0, 200)}${feedback ? ' + feedback' : ''}`,
           outputSummary: `${coderResult.output.files.length} files, commit: ${coderResult.output.commitMessage}`,
           tokensUsed: coderResult.tokensUsed,
           durationMs: coderResult.durationMs,
@@ -188,16 +215,6 @@ export class PipelineRunner {
       logger.error(`Task #${task.id} failed: ${message}`);
       return this.repo.getById(task.id)!;
     }
-  }
-
-  /** Повторяет упавшую задачу — сбрасывает статус и запускает пайплайн заново */
-  async retry(taskId: number, options: PipelineOptions): Promise<TaskRecord> {
-    const task = this.repo.getById(taskId);
-    if (!task) throw new Error(`Task #${taskId} not found`);
-    if (task.status !== 'failed') throw new Error(`Task #${taskId} is not in failed state`);
-
-    this.repo.updateStatus(taskId, 'pending');
-    return this.run(task.description, options);
   }
 
   /**
