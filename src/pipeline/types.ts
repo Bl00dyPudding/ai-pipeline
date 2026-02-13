@@ -92,6 +92,31 @@ export interface PipelineOptions {
   autoMerge: boolean;
 }
 
+/** SSE-событие: смена статуса задачи */
+export interface SSETaskStatusEvent {
+  taskId: number;
+  status: TaskStatus;
+  timestamp: string;
+}
+
+/** SSE-событие: новый лог агента */
+export interface SSETaskLogEvent {
+  taskId: number;
+  log: Omit<TaskLogRecord, 'id' | 'task_id'>;
+}
+
+/** SSE-событие: ошибка задачи */
+export interface SSETaskErrorEvent {
+  taskId: number;
+  error: string;
+}
+
+/** SSE-событие: фидбек ревьюера */
+export interface SSETaskFeedbackEvent {
+  taskId: number;
+  feedback: string;
+}
+
 /** Собранный контекст репозитория — передаётся в промпт кодера */
 export interface RepoContext {
   /** Содержимое конфигурационных файлов (package.json, tsconfig и т.д.) */

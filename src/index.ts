@@ -7,6 +7,7 @@
  */
 
 import { resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { Command } from 'commander';
 import { getConfig } from './config.js';
 import { getDatabase, closeDatabase } from './db/sqlite.js';
@@ -14,6 +15,11 @@ import { TaskRepository } from './db/tasks.js';
 import { PipelineRunner } from './pipeline/runner.js';
 import { logger } from './utils/logger.js';
 import type { TaskStatus } from './pipeline/types.js';
+import { startServer } from './server/index.js';
+
+function expandHome(p: string): string {
+  return p.startsWith('~/') ? resolve(homedir(), p.slice(2)) : resolve(p);
+}
 
 const program = new Command();
 
@@ -43,7 +49,7 @@ program
       const runner = new PipelineRunner(config, repo);
 
       const task = await runner.run(description, {
-        repoPath: resolve(opts.repo),
+        repoPath: expandHome(opts.repo),
         model: config.model,
         maxAttempts: config.maxAttempts,
         autoMerge: config.autoMerge,
@@ -82,7 +88,7 @@ program
       const task = repo.create({
         title: description.slice(0, 100),
         description,
-        repoPath: resolve(opts.repo),
+        repoPath: expandHome(opts.repo),
         maxAttempts: config.maxAttempts,
       });
 
@@ -113,7 +119,7 @@ program
       });
       const db = getDatabase(config);
       const repo = new TaskRepository(db);
-      const repoPath = resolve(opts.repo);
+      const repoPath = expandHome(opts.repo);
 
       const tasks = repo.listPending(repoPath, opts.limit);
       if (tasks.length === 0) {
@@ -265,7 +271,7 @@ program
 
       const runner = new PipelineRunner(config, repo);
       const result = await runner.retry(task.id, {
-        repoPath: opts.repo ? resolve(opts.repo) : task.repo_path,
+        repoPath: opts.repo ? expandHome(opts.repo) : task.repo_path,
         model: config.model,
         maxAttempts: config.maxAttempts,
         autoMerge: config.autoMerge,
@@ -281,6 +287,46 @@ program
       process.exit(1);
     } finally {
       closeDatabase();
+    }
+  });
+
+/** Команда serve — запускает веб-интерфейс */
+program
+  .command('serve')
+  .description('Start the web UI server')
+  .option('--repo <path>', 'Path to target repository (or AI_PIPELINE_REPO_PATH)')
+  .option('--port <port>', 'Port to listen on', (v: string) => parseInt(v, 10), 3000)
+  .option('--host <host>', 'Host to bind to', '0.0.0.0')
+  .option('--model <model>', 'Claude model to use')
+  .option('--max-attempts <n>', 'Maximum coding attempts', parseInt)
+  .option('--auto-merge', 'Automatically merge into main branch')
+  .action(async (opts: { repo?: string; port: number; host: string; model?: string; maxAttempts?: number; autoMerge?: boolean }) => {
+    try {
+      const config = getConfig({
+        model: opts.model,
+        maxAttempts: opts.maxAttempts,
+        autoMerge: opts.autoMerge,
+      });
+
+      const repoPath = opts.repo ?? config.repoPath;
+      if (!repoPath) {
+        logger.error('--repo is required (or set AI_PIPELINE_REPO_PATH in .env)');
+        process.exit(1);
+      }
+
+      const db = getDatabase(config);
+
+      await startServer({
+        config,
+        db,
+        repoPath: expandHome(repoPath),
+        port: opts.port,
+        host: opts.host,
+      });
+      // Server keeps running — don't close DB or exit
+    } catch (err) {
+      logger.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
     }
   });
 

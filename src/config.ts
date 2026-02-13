@@ -21,6 +21,7 @@ export interface AppConfig {
   maxAttempts: number;
   autoMerge: boolean;
   dbPath: string;
+  repoPath?: string;
 }
 
 /** Кеш конфига — повторные вызовы без overrides возвращают тот же объект */
@@ -50,6 +51,9 @@ export function getConfig(overrides: Partial<AppConfig> = {}): AppConfig {
       ?? (process.env['AI_PIPELINE_AUTO_MERGE'] === 'true'),
     dbPath: overrides.dbPath
       ?? resolve(projectRoot, process.env['AI_PIPELINE_DB_PATH'] ?? 'ai-pipeline.db'),
+    repoPath: overrides.repoPath
+      ?? process.env['AI_PIPELINE_REPO_PATH']
+      ?? undefined,
   };
 
   if (!config.anthropicApiKey) {

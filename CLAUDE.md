@@ -64,11 +64,34 @@ ai-pipeline/
 │   ├── test-runner/
 │   │   └── executor.ts       # runTests() — detect PM, run lint + test через child_process
 │   │
+│   ├── server/
+│   │   ├── index.ts          # createApp(), startServer() — H3 + node:http
+│   │   ├── event-bus.ts      # TaskEventBus + wrapRepoWithEvents() Proxy для SSE
+│   │   ├── static.ts         # Раздача dist/web-ui/ + SPA fallback
+│   │   └── routes/
+│   │       ├── tasks.ts      # GET/POST /api/tasks, GET /api/tasks/:id, GET /api/tasks/:id/logs
+│   │       ├── actions.ts    # POST /api/tasks/:id/run, /retry, /api/tasks/process
+│   │       └── events.ts     # GET /api/events — SSE endpoint
+│   │
 │   └── utils/
 │       ├── logger.ts         # logger singleton — info/success/warn/error/debug/spin
 │       └── tokens.ts         # estimateTokens, fitWithinBudget, TOKEN_BUDGETS
 │
+├── web/                      # Vue 3 SPA (собирается Vite в dist/web-ui/)
+│   ├── vite.config.ts
+│   ├── tsconfig.json         # Отдельный от основного
+│   ├── index.html
+│   └── src/
+│       ├── main.ts, App.vue, router.ts
+│       ├── api/              # client.ts (fetch), sse.ts (EventSource)
+│       ├── composables/      # useTasks.ts, useTask.ts
+│       ├── components/       # AppHeader, TaskList, TaskDetail, TaskForm, TaskLogEntry, StatusBadge
+│       ├── views/            # DashboardView, TaskView
+│       └── styles/           # main.css (тёмная тема)
+│
 └── dist/                     # Результат компиляции (npm run build)
+    ├── *.js                  # Скомпилированный TypeScript
+    └── web-ui/               # Собранный Vue SPA
 ```
 
 ---
@@ -214,6 +237,7 @@ CREATE INDEX idx_task_logs_task_id ON task_logs(task_id);
 | `AI_PIPELINE_MODEL` | нет | `claude-sonnet-4-20250514` | Модель Claude |
 | `AI_PIPELINE_MAX_ATTEMPTS` | нет | `3` | Макс. попыток кодера |
 | `AI_PIPELINE_AUTO_MERGE` | нет | `false` | Автомерж (`true`/`false`) |
+| `AI_PIPELINE_REPO_PATH` | нет | — | Путь к целевому репозиторию (альтернатива `--repo`) |
 | `AI_PIPELINE_DB_PATH` | нет | `./ai-pipeline.db` | Путь к SQLite |
 | `DEBUG` | нет | — | Debug-логи (любое значение) |
 
@@ -230,6 +254,7 @@ interface AppConfig {
   maxAttempts: number;
   autoMerge: boolean;
   dbPath: string;
+  repoPath?: string;
 }
 ```
 
@@ -255,6 +280,9 @@ ai-pipeline show <task-id>
 
 # Повтор упавшей задачи
 ai-pipeline retry <task-id> [--repo <путь>] [--model <m>] [--max-attempts <n>] [--auto-merge]
+
+# Веб-интерфейс (--repo или AI_PIPELINE_REPO_PATH)
+ai-pipeline serve [--repo <путь>] [--port 3000] [--host 0.0.0.0] [--model <m>] [--max-attempts <n>] [--auto-merge]
 ```
 
 Коды завершения: `0` — успех (`done`), `1` — ошибка/fail.
@@ -311,14 +339,20 @@ ai-pipeline retry <task-id> [--repo <путь>] [--model <m>] [--max-attempts <n
 # Установить зависимости
 npm install
 
-# Скомпилировать TypeScript
-npm run build        # однократная сборка
-npm run dev          # watch-режим
+# Скомпилировать TypeScript + собрать Vue SPA
+npm run build           # tsc + vite build
+npm run build:server    # только TypeScript
+npm run build:web       # только Vue SPA
+npm run dev             # tsc watch-режим
+npm run dev:web         # vite dev server (с прокси на :3000)
 
 # Запустить
 node dist/index.js run "задача" --repo ~/project
 # или после npm link:
 ai-pipeline run "задача" --repo ~/project
+
+# Веб-интерфейс
+ai-pipeline serve --repo ~/project --port 3000
 ```
 
 **Компиляция без ошибок — обязательное требование перед коммитом.**
@@ -346,11 +380,16 @@ ai-pipeline run "задача" --repo ~/project
 | `@anthropic-ai/sdk` | Клиент Claude API |
 | `better-sqlite3` | Синхронный SQLite драйвер |
 | `simple-git` | Git-операции (named export: `simpleGit`) |
+| `h3` | HTTP-фреймворк (ESM, SSE), сервер через `node:http` + `toNodeListener` |
 | `commander` | Парсинг CLI-команд |
 | `chalk` | Цветной вывод (ESM) |
 | `ora` | Спиннеры в терминале (ESM) |
 | `glob` | Поиск файлов по паттернам |
 | `dotenv` | Загрузка .env |
 | `typescript` | Компилятор (dev) |
+| `vue` | Vue 3 SPA (dev, собирается Vite) |
+| `vue-router` | Маршрутизация SPA (dev) |
+| `vite` | Сборщик фронтенда (dev) |
+| `@vitejs/plugin-vue` | Vite-плагин для Vue SFC (dev) |
 | `@types/better-sqlite3` | Типы для better-sqlite3 (dev) |
 | `@types/node` | Типы для Node.js (dev) |

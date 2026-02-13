@@ -16,6 +16,7 @@
   - [tasks — список задач](#tasks--список-задач)
   - [show — детали задачи](#show--детали-задачи)
   - [retry — повтор упавшей задачи](#retry--повтор-упавшей-задачи)
+  - [serve — веб-интерфейс](#serve--веб-интерфейс)
 - [Жизненный цикл задачи](#жизненный-цикл-задачи)
 - [Агенты](#агенты)
   - [Coder Agent](#coder-agent)
@@ -29,6 +30,7 @@
 - [Переменные окружения](#переменные-окружения)
 - [Примеры использования](#примеры-использования)
 - [Устранение неполадок](#устранение-неполадок)
+- [Веб-интерфейс](#веб-интерфейс)
 - [Технический стек](#технический-стек)
 
 ---
@@ -108,7 +110,7 @@ cd ai-pipeline
 # Установить зависимости
 npm install
 
-# Собрать TypeScript
+# Собрать TypeScript + Vue SPA
 npm run build
 
 # Создать .env файл
@@ -154,6 +156,9 @@ AI_PIPELINE_MAX_ATTEMPTS=3
 # Автоматический мерж в main (по умолчанию: false)
 AI_PIPELINE_AUTO_MERGE=false
 
+# Путь к целевому репозиторию (альтернатива --repo)
+# AI_PIPELINE_REPO_PATH=~/projects/my-app
+
 # Путь к файлу SQLite базы данных (по умолчанию: ./ai-pipeline.db)
 AI_PIPELINE_DB_PATH=./ai-pipeline.db
 ```
@@ -167,6 +172,7 @@ interface AppConfig {
   maxAttempts: number;      // Макс. попыток кодера
   autoMerge: boolean;       // Автомерж в main
   dbPath: string;           // Путь к SQLite файлу
+  repoPath?: string;        // Путь к репозиторию (из env)
 }
 ```
 
@@ -419,6 +425,67 @@ ai-pipeline retry 2
 # Повторить с другой моделью и большим числом попыток
 ai-pipeline retry 2 --model claude-sonnet-4-20250514 --max-attempts 5
 ```
+
+---
+
+### `serve` — Веб-интерфейс
+
+Запускает HTTP-сервер с веб-интерфейсом для управления задачами через браузер.
+
+```bash
+ai-pipeline serve [--repo <путь>] [опции]
+```
+
+**Аргументы:**
+
+| Параметр | Тип | Обязательный | Описание |
+|----------|-----|:------------:|----------|
+| `--repo <путь>` | путь | нет* | Путь к целевому git-репозиторию (*обязателен, если не задан `AI_PIPELINE_REPO_PATH`) |
+| `--port <порт>` | число | нет | Порт сервера (по умолчанию: 3000) |
+| `--host <хост>` | строка | нет | Адрес привязки (по умолчанию: 0.0.0.0) |
+| `--model <модель>` | строка | нет | Модель Claude |
+| `--max-attempts <n>` | число | нет | Максимальное количество попыток |
+| `--auto-merge` | флаг | нет | Автоматический мерж при успехе |
+
+**Примеры:**
+
+```bash
+# Запуск на порту 3000
+ai-pipeline serve --repo ~/projects/my-app
+
+# Кастомный порт
+ai-pipeline serve --repo ~/projects/my-app --port 8080
+
+# С путём из .env (AI_PIPELINE_REPO_PATH)
+ai-pipeline serve --port 3001
+
+# С автомержем
+ai-pipeline serve --repo ~/projects/my-app --auto-merge
+```
+
+**Возможности веб-интерфейса:**
+
+- Просмотр списка всех задач с цветными статусами
+- Создание новых задач через форму
+- Запуск задачи (pending) и ретрай (failed) из браузера
+- Просмотр деталей задачи: статус, ветка, попытки, ошибки, фидбек ревьюера
+- Просмотр логов агентов (кодер, ревьюер, тестер)
+- Обновление статусов и логов в реальном времени через SSE (Server-Sent Events)
+
+**REST API:**
+
+Сервер также предоставляет REST API:
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| GET | `/api/tasks?status=` | Список задач |
+| GET | `/api/tasks/:id` | Детали задачи |
+| GET | `/api/tasks/:id/logs` | Логи агентов задачи |
+| POST | `/api/tasks` | Создать задачу |
+| POST | `/api/tasks/:id/run` | Запустить pending задачу |
+| POST | `/api/tasks/:id/retry` | Ретрай failed задачи |
+| POST | `/api/tasks/process?limit=` | Запустить все pending задачи |
+| GET | `/api/events?taskId=` | SSE-поток событий |
 
 ---
 
@@ -758,10 +825,19 @@ ai-pipeline/
 │   │   └── operations.ts     # Git-операции через simple-git
 │   ├── test-runner/
 │   │   └── executor.ts       # Запуск lint + тестов через child_process
+│   ├── server/
+│   │   ├── index.ts          # H3 app + node:http сервер
+│   │   ├── event-bus.ts      # TaskEventBus + wrapRepoWithEvents() Proxy
+│   │   ├── static.ts         # Раздача SPA-статики
+│   │   └── routes/           # REST API + SSE
 │   └── utils/
 │       ├── logger.ts         # Логирование (chalk + ora спиннеры)
 │       └── tokens.ts         # Оценка токенов и управление бюджетом
-└── dist/                     # Скомпилированный JS (создаётся при build)
+├── web/                      # Vue 3 SPA (собирается Vite в dist/web-ui/)
+│   ├── vite.config.ts
+│   ├── index.html
+│   └── src/                  # Компоненты, composables, стили
+└── dist/                     # Скомпилированный JS + web-ui/ (создаётся при build)
 ```
 
 ---
@@ -770,7 +846,7 @@ ai-pipeline/
 
 ### `src/index.ts` — CLI точка входа
 
-Использует библиотеку `commander` для разбора аргументов командной строки. Определяет 6 команд: `run`, `add`, `process`, `tasks`, `show`, `retry`. Каждая команда:
+Использует библиотеку `commander` для разбора аргументов командной строки. Определяет 7 команд: `run`, `add`, `process`, `tasks`, `show`, `retry`, `serve`. Каждая команда:
 1. Загружает конфигурацию через `getConfig()` с учётом CLI-флагов
 2. Открывает SQLite базу данных
 3. Выполняет действие
@@ -930,6 +1006,7 @@ ai-pipeline/
 | `AI_PIPELINE_MODEL` | нет | `claude-sonnet-4-20250514` | Модель Claude |
 | `AI_PIPELINE_MAX_ATTEMPTS` | нет | `3` | Макс. попыток кодера |
 | `AI_PIPELINE_AUTO_MERGE` | нет | `false` | Автомерж в main |
+| `AI_PIPELINE_REPO_PATH` | нет | — | Путь к целевому репозиторию (альтернатива `--repo`) |
 | `AI_PIPELINE_DB_PATH` | нет | `./ai-pipeline.db` | Путь к SQLite файлу |
 | `DEBUG` | нет | — | Включить debug-логи (любое значение) |
 
@@ -1039,6 +1116,72 @@ Claude API может отвечать долго (до 60 секунд). Есл
 
 ---
 
+## Веб-интерфейс
+
+### Архитектура
+
+Веб-интерфейс построен на:
+
+- **Бэкенд**: [H3](https://github.com/unjs/h3) (HTTP-фреймворк) + `node:http`
+- **Фронтенд**: Vue 3 SPA + Vue Router (hash mode) + Vite
+- **Стили**: Plain CSS с CSS-переменными, тёмная тема в стиле терминала
+- **Реалтайм**: Server-Sent Events (SSE) через EventBus-прокси
+
+### Механизм SSE
+
+Для передачи обновлений в реальном времени используется EventBus-прокси вокруг `TaskRepository`. Функция `wrapRepoWithEvents()` возвращает `Proxy`, который перехватывает мутирующие методы (`updateStatus`, `addLog`, `setError`, `setReviewerFeedback`) и эмитит события в `TaskEventBus`. PipelineRunner получает обёрнутый repo — **код раннера не меняется**.
+
+SSE-события:
+
+| Событие | Данные | Когда |
+|---------|--------|-------|
+| `task:status` | `{ taskId, status, timestamp }` | Смена статуса задачи |
+| `task:log` | `{ taskId, log }` | Новый лог агента |
+| `task:error` | `{ taskId, error }` | Ошибка задачи |
+| `task:feedback` | `{ taskId, feedback }` | Фидбек ревьюера |
+
+### Сборка
+
+```bash
+# Собрать всё (TypeScript + Vue SPA)
+npm run build
+
+# Только Vue SPA
+npm run build:web
+
+# Dev-режим фронтенда (с hot-reload, прокси на :3000)
+npm run dev:web
+```
+
+Vue SPA собирается в `dist/web-ui/` и раздаётся сервером как статика с SPA-fallback.
+
+### Структура файлов
+
+```
+src/server/
+├── index.ts          # H3 app + node:http сервер
+├── event-bus.ts      # TaskEventBus + wrapRepoWithEvents() Proxy
+├── static.ts         # Раздача dist/web-ui/ + SPA fallback
+└── routes/
+    ├── tasks.ts      # GET/POST /api/tasks, GET /api/tasks/:id, /api/tasks/:id/logs
+    ├── actions.ts    # POST /api/tasks/:id/run, /retry, /api/tasks/process
+    └── events.ts     # GET /api/events — SSE endpoint
+
+web/
+├── vite.config.ts
+├── tsconfig.json
+├── index.html
+└── src/
+    ├── main.ts, App.vue, router.ts
+    ├── api/              # fetch-клиент + SSE с реконнектом
+    ├── composables/      # useTasks(), useTask() — реактивные данные + SSE
+    ├── components/       # AppHeader, TaskList, TaskDetail, TaskForm, TaskLogEntry, StatusBadge
+    ├── views/            # DashboardView (список + форма), TaskView (детали + логи)
+    └── styles/           # main.css (тёмная тема, CSS-переменные)
+```
+
+---
+
 ## Технический стек
 
 | Пакет | Версия | Назначение |
@@ -1052,3 +1195,7 @@ Claude API может отвечать долго (до 60 секунд). Есл
 | ora | ^8.1 | Спиннеры для длительных операций |
 | glob | ^11.0 | Поиск файлов по паттернам |
 | dotenv | ^16.4 | Загрузка .env файлов |
+| h3 | ^2.0 | HTTP-фреймворк (ESM, SSE), сервер через `node:http` |
+| vue | ^3.5 | Vue 3 SPA (devDependency) |
+| vue-router | ^4 | Маршрутизация SPA (devDependency) |
+| vite | ^6 | Сборщик фронтенда (devDependency) |
