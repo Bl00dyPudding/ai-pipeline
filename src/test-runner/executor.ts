@@ -64,10 +64,34 @@ async function hasScript(repoPath: string, scriptName: string): Promise<boolean>
 export async function runTests(repoPath: string): Promise<TestResult> {
   const pm = await detectPackageManager(repoPath);
 
+  let buildOutput = '';
+  let buildPassed = true;
   let lintOutput = '';
   let lintPassed = true;
   let testOutput = '';
   let testPassed = true;
+
+  // Запуск билда
+  if (await hasScript(repoPath, 'build')) {
+    logger.debug('Running build...');
+    const build = await runCommand(pm, ['run', 'build'], repoPath);
+    buildOutput = (build.stdout + '\n' + build.stderr).trim();
+    buildPassed = build.exitCode === 0;
+    logger.debug(`Build ${buildPassed ? 'passed' : 'failed'} (exit code: ${build.exitCode})`);
+
+    if (!buildPassed) {
+      return {
+        passed: false,
+        buildOutput,
+        lintOutput: 'Skipped — build failed',
+        testOutput: 'Skipped — build failed',
+        summary: 'Build failed',
+      };
+    }
+  } else {
+    buildOutput = 'No build script found — skipped';
+    logger.debug('No build script found, skipping');
+  }
 
   // Запуск линтера
   if (await hasScript(repoPath, 'lint')) {
@@ -99,5 +123,5 @@ export async function runTests(repoPath: string): Promise<TestResult> {
   if (!testPassed) summaryParts.push('Tests failed');
   const summary = passed ? 'All checks passed' : summaryParts.join('; ');
 
-  return { passed, lintOutput, testOutput, summary };
+  return { passed, buildOutput, lintOutput, testOutput, summary };
 }

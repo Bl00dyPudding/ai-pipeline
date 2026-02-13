@@ -6,14 +6,14 @@
 
 ## Что это за проект
 
-**ai-pipeline** — CLI-утилита на Node.js/TypeScript, реализующая мультиагентный конвейер разработки. Три ИИ-агента (кодер, ревьюер, тест-раннер) автоматизируют цикл: задача → код → ревью → тесты → мерж. Целевые проекты — JS/TS/Vue/Nuxt.
+**ai-pipeline** — CLI-утилита на Node.js/TypeScript, реализующая мультиагентный конвейер разработки. Четыре ИИ-агента (планировщик, кодер, ревьюер, тест-раннер) автоматизируют цикл: задача → план → код → ревью → тесты → мерж. Целевые проекты — JS/TS/Vue/Nuxt.
 
 **Основной сценарий использования:**
 ```bash
 ai-pipeline run "добавь валидацию формы" --repo ~/my-app
 ```
 
-Пайплайн создаёт ветку в целевом репозитории, генерирует код через Claude API, проводит автоматическое код-ревью, запускает lint/тесты и (опционально) мержит в main.
+Пайплайн создаёт ветку в целевом репозитории, составляет план реализации, генерирует код через Claude API, проводит автоматическое код-ревью, запускает lint/тесты и (опционально) мержит в main.
 
 ---
 
@@ -41,14 +41,15 @@ ai-pipeline/
 │   ├── config.ts             # getConfig() — .env из корня проекта (не cwd), кешируется
 │   │
 │   ├── pipeline/
-│   │   ├── types.ts          # ВСЕ типы проекта (TaskRecord, CoderOutput, ReviewerOutput, etc.)
-│   │   └── runner.ts         # PipelineRunner — стейт-машина: coding → reviewing → testing → done
+│   │   ├── types.ts          # ВСЕ типы проекта (TaskRecord, PlannerOutput, CoderOutput, ReviewerOutput, etc.)
+│   │   └── runner.ts         # PipelineRunner — стейт-машина: planning → coding → reviewing → testing → done
 │   │
 │   ├── agents/
 │   │   ├── base.ts           # BaseAgent — Anthropic SDK client, call(), callWithRetry(), parseJSON()
+│   │   ├── planner.ts        # PlannerAgent extends BaseAgent — plan()
 │   │   ├── coder.ts          # CoderAgent extends BaseAgent — generate()
 │   │   ├── reviewer.ts       # ReviewerAgent extends BaseAgent — review()
-│   │   └── prompts.ts        # CODER_SYSTEM_PROMPT, REVIEWER_SYSTEM_PROMPT, билдеры user prompt
+│   │   └── prompts.ts        # PLANNER/CODER/REVIEWER_SYSTEM_PROMPT, билдеры user prompt
 │   │
 │   ├── context/
 │   │   ├── gatherer.ts       # gatherContext() — 4 уровня: metadata, tree, key files, imports
@@ -62,7 +63,7 @@ ai-pipeline/
 │   │   └── operations.ts     # GitOperations — createBranch, commitFiles, getDiff, mergeBranch
 │   │
 │   ├── test-runner/
-│   │   └── executor.ts       # runTests() — detect PM, run lint + test через child_process
+│   │   └── executor.ts       # runTests() — detect PM, run build + lint + test через child_process
 │   │
 │   ├── server/
 │   │   ├── index.ts          # createApp(), startServer() — H3 + node:http
@@ -125,7 +126,19 @@ ai-pipeline/
 
 ### Формат ответов агентов
 
-Оба агента возвращают **чистый JSON** (без markdown code fences). BaseAgent.parseJSON() умеет снимать code fences, но промпты требуют чистый JSON.
+Все агенты возвращают **чистый JSON** (без markdown code fences). BaseAgent.parseJSON() умеет снимать code fences, но промпты требуют чистый JSON.
+
+**Planner:**
+```json
+{
+  "analysis": "string",
+  "filesToModify": [{ "path": "string", "reason": "string" }],
+  "steps": [{ "step": "number", "description": "string", "files": ["string"] }],
+  "patternsToFollow": ["string"],
+  "risks": [{ "risk": "string", "mitigation": "string" }],
+  "strategy": "string"
+}
+```
 
 **Coder:**
 ```json
@@ -148,18 +161,18 @@ ai-pipeline/
 ### Стейт-машина пайплайна
 
 ```
-pending → coding → reviewing → testing → done
-                      ↓            ↓
-                   (reject)      (fail)
-                      ↓            ↓
-                   coding ← ─── coding   (новая попытка, чистая ветка от main)
-                      ↓
-               (попытки исчерпаны)
-                      ↓
-                    failed
+pending → planning → coding → reviewing → testing → done
+                                  ↓            ↓
+                               (reject)      (fail)
+                                  ↓            ↓
+                              planning ← ── planning   (пересоставляет план с фидбеком)
+                                  ↓
+                           (попытки исчерпаны)
+                                  ↓
+                                failed
 ```
 
-Каждая попытка — **чистая ветка** `ai/task-{id}-attempt-{n}` от main.
+Каждая попытка — **чистая ветка** `ai/task-{id}-attempt-{n}` от main. При ретрае (reject/test fail) планировщик пересоставляет план с учётом фидбека, затем кодер генерирует код по обновлённому плану.
 
 ### Git-конвенции
 
@@ -194,7 +207,7 @@ CREATE TABLE tasks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL,
   description TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',  -- pending|coding|reviewing|testing|done|failed
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending|planning|coding|reviewing|testing|done|failed
   repo_path TEXT NOT NULL,
   branch_name TEXT,                        -- ai/task-{id}-attempt-{n}
   attempt INTEGER NOT NULL DEFAULT 0,
@@ -209,8 +222,8 @@ CREATE TABLE tasks (
 CREATE TABLE task_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  agent TEXT NOT NULL,      -- coder|reviewer|tester|pipeline
-  action TEXT NOT NULL,     -- generate|review|test|complete
+  agent TEXT NOT NULL,      -- planner|coder|reviewer|tester|pipeline
+  action TEXT NOT NULL,     -- plan|generate|review|test|complete
   input_summary TEXT,
   output_summary TEXT,
   tokens_used INTEGER DEFAULT 0,
@@ -273,7 +286,7 @@ ai-pipeline add <описание> --repo <путь> [--max-attempts <n>] [--aut
 ai-pipeline process --repo <путь> [--model <m>] [--max-attempts <n>] [--auto-merge] [--limit <n>]
 
 # Список задач
-ai-pipeline tasks [--status <pending|coding|reviewing|testing|done|failed>]
+ai-pipeline tasks [--status <pending|planning|coding|reviewing|testing|done|failed>]
 
 # Детали задачи + логи агентов
 ai-pipeline show <task-id>

@@ -11,6 +11,6 @@ import { computed } from 'vue';
 const props = defineProps<{ status: string }>();
 
 const isActive = computed(() =>
-  ['coding', 'reviewing', 'testing'].includes(props.status)
+  ['planning', 'coding', 'reviewing', 'testing'].includes(props.status)
 );
 </script>

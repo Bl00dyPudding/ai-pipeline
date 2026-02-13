@@ -5,7 +5,7 @@
 
 import { BaseAgent } from './base.js';
 import { CODER_SYSTEM_PROMPT, buildCoderUserPrompt } from './prompts.js';
-import type { CoderOutput } from '../pipeline/types.js';
+import type { CoderOutput, PlannerOutput } from '../pipeline/types.js';
 import { logger } from '../utils/logger.js';
 
 /** Результат вызова кодера — ответ + метаинформация (токены, время) */
@@ -24,15 +24,17 @@ export class CoderAgent extends BaseAgent {
    * Генерирует изменения файлов для выполнения задачи.
    * @param context — текстовый контекст репозитория (метаданные, дерево, ключевые файлы)
    * @param taskDescription — описание задачи от пользователя
+   * @param plan — план реализации от планировщика
    * @param feedback — фидбек от ревьюера/тестов с предыдущей попытки (если есть)
    * @returns структурированный ответ с файлами для изменения
    */
   async generate(
     context: string,
     taskDescription: string,
+    plan: PlannerOutput,
     feedback?: string,
   ): Promise<CoderCallResult> {
-    const userPrompt = buildCoderUserPrompt(context, taskDescription, feedback);
+    const userPrompt = buildCoderUserPrompt(context, taskDescription, plan, feedback);
     const start = Date.now();
 
     const { parsed: output, tokensUsed } = await this.callWithRetry<CoderOutput>(

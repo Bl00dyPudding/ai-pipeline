@@ -5,10 +5,10 @@
  */
 
 /** Статусы задачи — соответствуют стейт-машине пайплайна */
-export type TaskStatus = 'pending' | 'coding' | 'reviewing' | 'testing' | 'done' | 'failed';
+export type TaskStatus = 'pending' | 'planning' | 'coding' | 'reviewing' | 'testing' | 'done' | 'failed';
 
 /** Роли агентов — каждый агент пишет логи под своей ролью */
-export type AgentRole = 'coder' | 'reviewer' | 'tester' | 'pipeline';
+export type AgentRole = 'planner' | 'coder' | 'reviewer' | 'tester' | 'pipeline';
 
 /** Запись задачи в БД — соответствует таблице tasks */
 export interface TaskRecord {
@@ -79,9 +79,30 @@ export interface ReviewerOutput {
 /** Результат запуска линтера и тестов */
 export interface TestResult {
   passed: boolean;
+  buildOutput: string;
   lintOutput: string;
   testOutput: string;
   summary: string;
+}
+
+/** Структурированный ответ агента-планировщика */
+export interface PlannerOutput {
+  analysis: string;
+  filesToModify: Array<{
+    path: string;
+    reason: string;
+  }>;
+  steps: Array<{
+    step: number;
+    description: string;
+    files: string[];
+  }>;
+  patternsToFollow: string[];
+  risks: Array<{
+    risk: string;
+    mitigation: string;
+  }>;
+  strategy: string;
 }
 
 /** Опции запуска пайплайна — передаются из CLI */

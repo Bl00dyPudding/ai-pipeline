@@ -20,7 +20,8 @@ import type { TaskLog } from '../api/client';
 defineProps<{ log: TaskLog }>();
 
 function formatTime(iso: string): string {
-  const d = new Date(iso + 'Z');
-  return d.toLocaleTimeString();
+  if (!iso) return '';
+  const d = new Date(iso.replace(' ', 'T') + 'Z');
+  return isNaN(d.getTime()) ? iso : d.toLocaleTimeString();
 }
 </script>

@@ -7,9 +7,10 @@
 import { writeFile, mkdir, rm } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import type { AppConfig } from '../config.js';
-import type { PipelineOptions, TaskRecord } from './types.js';
+import type { PipelineOptions, PlannerOutput, TaskRecord } from './types.js';
 import { TaskRepository } from '../db/tasks.js';
 import { GitOperations } from '../git/operations.js';
+import { PlannerAgent } from '../agents/planner.js';
 import { CoderAgent } from '../agents/coder.js';
 import { ReviewerAgent } from '../agents/reviewer.js';
 import { gatherContext, formatContextForPrompt } from '../context/gatherer.js';
@@ -19,12 +20,14 @@ import { logger } from '../utils/logger.js';
 export class PipelineRunner {
   private config: AppConfig;
   private repo: TaskRepository;
+  private planner: PlannerAgent;
   private coder: CoderAgent;
   private reviewer: ReviewerAgent;
 
   constructor(config: AppConfig, repo: TaskRepository) {
     this.config = config;
     this.repo = repo;
+    this.planner = new PlannerAgent(config.anthropicApiKey, config.model);
     this.coder = new CoderAgent(config.anthropicApiKey, config.model);
     this.reviewer = new ReviewerAgent(config.anthropicApiKey, config.model);
   }
@@ -67,10 +70,11 @@ export class PipelineRunner {
   /**
    * Внутренний метод — выполняет полный цикл пайплайна для задачи.
    * Алгоритм: для каждой попытки (1..maxAttempts):
-   *   1. Кодинг: собрать контекст → сгенерировать код → закоммитить в ветку
-   *   2. Ревью: получить diff → отправить ревьюеру → при реджекте — к шагу 1 с фидбеком
-   *   3. Тесты: запустить lint + test → при провале — к шагу 1 с выводом ошибок
-   *   4. Мерж: (если autoMerge) влить ветку в main
+   *   1. Планирование: собрать контекст → составить/пересоставить план (с фидбеком если есть)
+   *   2. Кодинг: сгенерировать код по плану → закоммитить в ветку
+   *   3. Ревью: получить diff → отправить ревьюеру → при реджекте — к шагу 1 с фидбеком
+   *   4. Тесты: запустить lint + test → при провале — к шагу 1 с выводом ошибок
+   *   5. Мерж: (если autoMerge) влить ветку в main
    */
   private async execute(task: TaskRecord, options: PipelineOptions): Promise<TaskRecord> {
     logger.header(`Task #${task.id}: ${task.title}`);
@@ -79,8 +83,10 @@ export class PipelineRunner {
       const git = new GitOperations(options.repoPath);
       await git.ensureClean();
 
-      /** Фидбек от ревьюера/тестов — передаётся кодеру при следующей попытке */
+      /** Фидбек от ревьюера/тестов — передаётся планировщику и кодеру при следующей попытке */
       let feedback: string | undefined;
+      /** План от планировщика — пересоставляется при наличии фидбека */
+      let plan: PlannerOutput | undefined;
 
       for (let attempt = 1; attempt <= options.maxAttempts; attempt++) {
         // Каждая попытка — чистая ветка от main
@@ -89,14 +95,40 @@ export class PipelineRunner {
 
         logger.info(`Attempt ${attempt}/${options.maxAttempts}`);
 
+        const context = await gatherContext(options.repoPath, task.description);
+        const contextText = formatContextForPrompt(context);
+
+        // === ФАЗА ПЛАНИРОВАНИЯ ===
+        if (!plan || feedback) {
+          this.repo.updateStatus(task.id, 'planning');
+          const planSpinner = logger.spin('Planning implementation...');
+
+          const plannerResult = await this.planner.plan(contextText, task.description, feedback);
+          planSpinner.succeed('Plan created');
+
+          plan = plannerResult.output;
+
+          logger.step(`Strategy: ${plan.strategy}`);
+
+          this.repo.addLog({
+            taskId: task.id,
+            agent: 'planner',
+            action: 'plan',
+            inputSummary: `Task: ${task.description.slice(0, 200)}${feedback ? ' + feedback' : ''}`,
+            outputSummary: `${plan.steps.length} steps, ${plan.filesToModify.length} files: ${plan.strategy}`,
+            tokensUsed: plannerResult.tokensUsed,
+            durationMs: plannerResult.durationMs,
+          });
+        }
+
         // === ФАЗА КОДИНГА ===
         this.repo.updateStatus(task.id, 'coding');
         const spinner = logger.spin('Generating code...');
 
-        const context = await gatherContext(options.repoPath, task.description);
-        const contextText = formatContextForPrompt(context);
-
-        const coderResult = await this.coder.generate(contextText, task.description, feedback);
+        if (!plan) {
+          throw new Error('Plan not initialized — this should not happen');
+        }
+        const coderResult = await this.coder.generate(contextText, task.description, plan, feedback);
         spinner.succeed('Code generated');
 
         if (coderResult.output.thinking) {
@@ -176,7 +208,7 @@ export class PipelineRunner {
 
         // При провале тестов — сохраняем вывод ошибок как фидбек для кодера
         if (!testResult.passed) {
-          feedback = `Tests/lint failed:\n\nLint output:\n${testResult.lintOutput}\n\nTest output:\n${testResult.testOutput}`;
+          feedback = `Tests/lint failed:\n\nBuild output:\n${testResult.buildOutput}\n\nLint output:\n${testResult.lintOutput}\n\nTest output:\n${testResult.testOutput}`;
           this.repo.setReviewerFeedback(task.id, feedback);
           logger.warn(`Tests failed — will retry`);
           continue;

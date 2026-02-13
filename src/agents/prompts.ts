@@ -1,8 +1,54 @@
 /**
- * Промпты для ИИ-агентов (кодер и ревьюер).
+ * Промпты для ИИ-агентов (планировщик, кодер и ревьюер).
  * Системные промпты — константы, определяющие поведение и формат ответа.
  * Пользовательские промпты — функции-билдеры, собирающие контекст + задачу.
  */
+
+import type { PlannerOutput } from '../pipeline/types.js';
+
+/**
+ * Системный промпт планировщика.
+ * Роль — senior software architect. Анализирует кодовую базу и создаёт пошаговый план.
+ */
+export const PLANNER_SYSTEM_PROMPT = `You are a senior software architect. You receive a project context and a task description.
+
+Your job is to deeply analyze the codebase and create a detailed implementation plan for the task.
+
+IMPORTANT RULES:
+- Study the existing patterns, conventions, and architecture carefully
+- Identify ALL files that need to be modified or created
+- Break the task into ordered steps with clear dependencies
+- Note patterns the coder must follow (naming, imports, error handling, etc.)
+- Identify potential risks and how to mitigate them
+- Do NOT write code — only plan
+
+You MUST respond with ONLY a valid JSON object in this exact format (no markdown, no code fences):
+{
+  "analysis": "Brief analysis of the codebase and how the task fits into it",
+  "filesToModify": [
+    {
+      "path": "relative/path/to/file.ts",
+      "reason": "Why this file needs changes"
+    }
+  ],
+  "steps": [
+    {
+      "step": 1,
+      "description": "What to do in this step",
+      "files": ["relative/path/to/file.ts"]
+    }
+  ],
+  "patternsToFollow": [
+    "Description of a pattern the coder must follow"
+  ],
+  "risks": [
+    {
+      "risk": "What could go wrong",
+      "mitigation": "How to prevent or handle it"
+    }
+  ],
+  "strategy": "Overall implementation strategy summary"
+}`;
 
 /**
  * Системный промпт кодера.
@@ -70,15 +116,65 @@ You MUST respond with ONLY a valid JSON object in this exact format (no markdown
 }`;
 
 /**
- * Собирает пользовательский промпт для кодера.
+ * Собирает пользовательский промпт для планировщика.
  * Включает контекст репозитория, описание задачи и (опционально) фидбек с предыдущей попытки.
  */
-export function buildCoderUserPrompt(
+export function buildPlannerUserPrompt(
   context: string,
   taskDescription: string,
   feedback?: string,
 ): string {
   let prompt = `## Project Context\n\n${context}\n\n## Task\n\n${taskDescription}`;
+
+  if (feedback) {
+    prompt += `\n\n## Previous Attempt Feedback\n\nThe previous implementation was rejected. Consider this feedback when creating the new plan:\n\n${feedback}`;
+  }
+
+  prompt += `\n\n## Instructions\n\nAnalyze the codebase above and create a detailed step-by-step implementation plan for this task. Do NOT write code — only plan.`;
+
+  return prompt;
+}
+
+/**
+ * Собирает пользовательский промпт для кодера.
+ * Включает контекст репозитория, описание задачи, план от планировщика и (опционально) фидбек.
+ */
+export function buildCoderUserPrompt(
+  context: string,
+  taskDescription: string,
+  plan: PlannerOutput,
+  feedback?: string,
+): string {
+  let prompt = `## Project Context\n\n${context}\n\n## Task\n\n${taskDescription}`;
+
+  // Форматируем план от планировщика
+  prompt += `\n\n## Implementation Plan\n\n`;
+  prompt += `**Strategy:** ${plan.strategy}\n\n`;
+  prompt += `**Analysis:** ${plan.analysis}\n\n`;
+
+  prompt += `### Files to Modify\n`;
+  for (const f of plan.filesToModify) {
+    prompt += `- \`${f.path}\` — ${f.reason}\n`;
+  }
+
+  prompt += `\n### Steps\n`;
+  for (const s of plan.steps) {
+    prompt += `${s.step}. ${s.description} (files: ${s.files.map(f => `\`${f}\``).join(', ')})\n`;
+  }
+
+  if (plan.patternsToFollow.length > 0) {
+    prompt += `\n### Patterns to Follow\n`;
+    for (const p of plan.patternsToFollow) {
+      prompt += `- ${p}\n`;
+    }
+  }
+
+  if (plan.risks.length > 0) {
+    prompt += `\n### Risks\n`;
+    for (const r of plan.risks) {
+      prompt += `- **${r.risk}** — ${r.mitigation}\n`;
+    }
+  }
 
   if (feedback) {
     prompt += `\n\n## Previous Attempt Feedback\n\nYour previous implementation was rejected. Fix these issues:\n\n${feedback}`;

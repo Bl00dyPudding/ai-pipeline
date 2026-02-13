@@ -104,9 +104,10 @@ a:hover {
   flex-shrink: 0;
 }
 .badge--pending { background: var(--blue-bg); color: var(--blue); }
+.badge--planning { background: var(--blue-bg); color: var(--accent-hover); }
 .badge--coding { background: var(--purple-bg); color: var(--purple); }
 .badge--reviewing { background: var(--yellow-bg); color: var(--yellow); }
-.badge--testing { background: var(--yellow-bg); color: var(--yellow); }
+.badge--testing { background: var(--blue-bg); color: var(--blue); }
 .badge--done { background: var(--green-bg); color: var(--green); }
 .badge--failed { background: var(--red-bg); color: var(--red); }
 
@@ -255,6 +256,7 @@ a:hover {
   border-radius: 0 var(--radius) var(--radius) 0;
   font-size: 13px;
 }
+.log-entry--planner { border-left-color: var(--accent-hover); }
 .log-entry--coder { border-left-color: var(--purple); }
 .log-entry--reviewer { border-left-color: var(--yellow); }
 .log-entry--tester { border-left-color: var(--blue); }
