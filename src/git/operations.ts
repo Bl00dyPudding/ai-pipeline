@@ -114,4 +114,23 @@ export class GitOperations {
     const log = await this.git.log({ maxCount: 1 });
     return log.latest?.hash ?? '';
   }
+
+  /**
+   * Удаляет локальные attempt-ветки задачи после завершения.
+   * keepBranch — ветка, которую нужно оставить (финальная при успехе).
+   */
+  async cleanupBranches(taskId: number, keepBranch?: string): Promise<void> {
+    const prefix = `ai/task-${taskId}-attempt-`;
+    const branches = await this.git.branchLocal();
+    const toDelete = branches.all.filter(b => b.startsWith(prefix) && b !== keepBranch);
+
+    for (const branch of toDelete) {
+      try {
+        await this.git.deleteLocalBranch(branch, true);
+        logger.debug(`Deleted branch: ${branch}`);
+      } catch (err) {
+        logger.debug(`Failed to delete branch ${branch}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
 }

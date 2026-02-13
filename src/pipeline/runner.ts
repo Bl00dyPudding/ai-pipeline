@@ -201,12 +201,14 @@ export class PipelineRunner {
         });
 
         logger.success(`Task #${task.id} completed successfully!`);
+        await git.cleanupBranches(task.id, branchName);
         return this.repo.getById(task.id)!;
       }
 
       // Все попытки исчерпаны — задача переходит в статус failed
       this.repo.setError(task.id, `Failed after ${options.maxAttempts} attempts`);
       logger.error(`Task #${task.id} failed after ${options.maxAttempts} attempts`);
+      await git.cleanupBranches(task.id);
       return this.repo.getById(task.id)!;
 
     } catch (err) {

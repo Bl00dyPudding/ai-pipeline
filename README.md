@@ -459,6 +459,10 @@ pending → coding → reviewing → testing → done
 
 Если все попытки исчерпаны — задача переходит в статус `failed` с сообщением об ошибке.
 
+После завершения задачи промежуточные attempt-ветки удаляются автоматически:
+- **done** — удаляются все ветки кроме финальной (она нужна для ручного мержа)
+- **failed** — удаляются все attempt-ветки
+
 ---
 
 ## Агенты
@@ -710,6 +714,7 @@ class TaskRepository {
 | `getDiff(base?)` | `git diff {base}...HEAD` |
 | `mergeBranch(name)` | Мержит ветку в основную с `--no-ff` |
 | `checkoutBranch(name)` | Переключает на указанную ветку |
+| `cleanupBranches(taskId, keepBranch?)` | Удаляет локальные attempt-ветки задачи (кроме `keepBranch`, если передан) |
 | `getLastCommitHash()` | Возвращает хеш последнего коммита |
 
 ### Именование веток

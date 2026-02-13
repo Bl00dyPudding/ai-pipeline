@@ -146,6 +146,7 @@ pending → coding → reviewing → testing → done
 - Коммит: только файлы кодера (`commitFiles()`), не `git add .`
 - Pull: с graceful catch (работает offline)
 - Определение main-ветки: `origin/HEAD` → `main` → `master` → текущая
+- Очистка веток: после завершения задачи (`done` — удаляются все кроме финальной, `failed` — удаляются все)
 
 ### Бюджет токенов контекста
 
