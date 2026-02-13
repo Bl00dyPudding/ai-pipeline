@@ -89,7 +89,8 @@ export class PipelineRunner {
         // Создаём ветку от main и применяем изменения
         await git.createBranch(branchName);
         await this.applyFileChanges(options.repoPath, coderResult.output.files);
-        await git.commitAll(coderResult.output.commitMessage);
+        const changedPaths = coderResult.output.files.map(f => f.path);
+        await git.commitFiles(changedPaths, coderResult.output.commitMessage);
         logger.success(`Committed to branch: ${branchName}`);
 
         // === ФАЗА РЕВЬЮ ===
@@ -98,7 +99,11 @@ export class PipelineRunner {
 
         const diff = await git.getDiff();
         const reviewResult = await this.reviewer.review(diff);
-        reviewSpinner.succeed(`Review: ${reviewResult.output.decision}`);
+        if (reviewResult.output.decision === 'approve') {
+          reviewSpinner.succeed(`Review: approve`);
+        } else {
+          reviewSpinner.fail(`Review: reject`);
+        }
 
         this.repo.addLog({
           taskId: task.id,

@@ -59,7 +59,7 @@ ai-pipeline/
 │   │   └── tasks.ts          # TaskRepository — create, getById, list, updateStatus, addLog, etc.
 │   │
 │   ├── git/
-│   │   └── operations.ts     # GitOperations — createBranch, commitAll, getDiff, mergeBranch
+│   │   └── operations.ts     # GitOperations — createBranch, commitFiles, getDiff, mergeBranch
 │   │
 │   ├── test-runner/
 │   │   └── executor.ts       # runTests() — detect PM, run lint + test через child_process
@@ -142,7 +142,8 @@ pending → coding → reviewing → testing → done
 
 - Ветки: `ai/task-{id}-attempt-{n}`
 - Merge: `--no-ff` для сохранения истории
-- Перед стартом: проверка `ensureClean()`
+- Перед стартом: проверка `ensureClean()` (untracked файлы игнорируются)
+- Коммит: только файлы кодера (`commitFiles()`), не `git add .`
 - Pull: с graceful catch (работает offline)
 - Определение main-ветки: `origin/HEAD` → `main` → `master` → текущая
 

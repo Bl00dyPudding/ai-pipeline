@@ -20,8 +20,14 @@ export class GitOperations {
   /** Проверяет, что рабочее дерево чистое — иначе пайплайн может затереть незакоммиченные изменения */
   async ensureClean(): Promise<void> {
     const status = await this.git.status();
-    if (!status.isClean()) {
-      throw new Error(`Repository at ${this.repoPath} has uncommitted changes. Please commit or stash them first.`);
+    // Игнорируем untracked файлы (??) — они не мешают работе пайплайна
+    const trackedDirty = status.files.filter(f => !(f.index === '?' && f.working_dir === '?'));
+    if (trackedDirty.length > 0) {
+      const dirty = trackedDirty.map(f => `  ${f.index}${f.working_dir} ${f.path}`).join('\n');
+      throw new Error(
+        `Repository at ${this.repoPath} has uncommitted changes. Please commit or stash them first.\n` +
+        `Dirty files:\n${dirty}`
+      );
     }
   }
 
@@ -71,8 +77,8 @@ export class GitOperations {
     logger.debug(`Created and checked out branch: ${branchName}`);
   }
 
-  async commitAll(message: string): Promise<string> {
-    await this.git.add('.');
+  async commitFiles(files: string[], message: string): Promise<string> {
+    await this.git.add(files);
     const result = await this.git.commit(message);
     return result.commit;
   }
